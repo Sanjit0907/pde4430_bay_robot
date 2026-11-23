@@ -18,12 +18,13 @@ Nodes started
     robot_state_publisher        TF for the robot's links from the URDF + /joint_states
     ros_gz_sim create            spawns the robot on the start pad (0, -2.6), facing the bay
     ros_gz_bridge                Gazebo <-> ROS topics (table below)
-    arm_controller               named arm modes on /arm_mode -> arm joint targets
+    arm_controller               gripper: /arm_mode + /lift_mode -> jaw and lift targets
 
 Bridged topics ( ] = ROS->Gazebo, [ = Gazebo->ROS )
     /cmd_vel             geometry_msgs/Twist     drive commands
     /left_arm/cmd_pos    std_msgs/Float64        left arm angle (rad)
     /right_arm/cmd_pos   std_msgs/Float64        right arm angle (rad)
+    /lift/cmd_pos        std_msgs/Float64        jaw lift height (m)
     /odom                nav_msgs/Odometry       wheel odometry
     /tf                  tf2_msgs/TFMessage      odom -> base_footprint
     /joint_states        sensor_msgs/JointState  wheel + arm angles
@@ -93,6 +94,7 @@ def generate_launch_description():
             '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
             '/left_arm/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
             '/right_arm/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+            '/lift/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
             '/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
             '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
             '/joint_states@sensor_msgs/msg/JointState[gz.msgs.Model',
