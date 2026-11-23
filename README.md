@@ -100,3 +100,23 @@ docker run --rm -v <path-to>/pde4430_ws:/ws osrf/ros:jazzy-desktop-full \
 Latest result: all checks pass. The robot drives 0.58 m in 3 s at 0.2 m/s, turns 82° in 3 s at 0.5 rad/s, and pushes a 0.12 m ball from x = 0.60 to x = 0.93 with no sideways drift. The lidar and camera both publish.
 
 > The test reads the ball's position from Gazebo **only to verify** the push. The robot itself never uses Gazebo's object positions, as the coursework rules require.
+
+## 7. Running without Ubuntu (browser desktop in Docker)
+
+`docker/` builds a ROS 2 Jazzy + Gazebo Harmonic desktop that runs in Docker and opens in a web browser through noVNC. It works on Windows or macOS with Docker Desktop.
+
+```bash
+docker build -t bay_desktop docker/
+docker run -d --name bay_desktop -p 127.0.0.1:6080:6080 --shm-size=2g \
+  -v <path-to>/pde4430_ws:/ws bay_desktop
+```
+Then open `http://localhost:6080/vnc.html?autoconnect=true&resize=remote`. The container builds the workspace on start. Its terminals have these shortcuts:
+
+| Command | Does |
+|---|---|
+| `sim` | Gazebo + robot in `config/test_world.sdf` (add `world:=...` for another world) |
+| `teleop` | keyboard driving (`teleop_twist_keyboard`) |
+| `model` | RViz model viewer |
+| `rebuild` | rebuild after editing files on the host |
+
+The container has no GPU, so rendering is software-only (Mesa) and slower than native Ubuntu. Native Ubuntu is still the target for the final demo. The VNC port is bound to `127.0.0.1` only.
