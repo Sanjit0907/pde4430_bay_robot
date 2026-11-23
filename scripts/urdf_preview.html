@@ -1,0 +1,77 @@
+<!doctype html>
+<!--
+  urdf_preview.html - browser 3D viewer for bay_robot.urdf (no ROS needed).
+  Serve the package folder (python -m http.server 8765) and open
+  http://localhost:8765/scripts/urdf_preview.html
+  The dashed square on the floor is the 0.5 m x 0.5 m spawn limit.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bay Robot Preview</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1b1e23; color: #e8e8e8; font: 14px system-ui, sans-serif; overflow: hidden; }
+  #info { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,.55); padding: 10px 14px; border-radius: 8px; line-height: 1.5; }
+  #info b { color: #f39a2b; }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="info">
+  <b>bay_robot.urdf</b><br>
+  Dashed square = 0.5 m × 0.5 m spawn limit<br>
+  Grid = 0.1 m · drag to orbit, scroll to zoom<br>
+  <span id="status">loading…</span>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import URDFLoader from 'https://cdn.jsdelivr.net/npm/urdf-loader@0.12.3/src/URDFLoader.js';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1b1e23);
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 50);
+camera.position.set(0.75, 0.55, 0.75);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.06, 0);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.8);
+sun.position.set(2, 3, 1);
+scene.add(sun);
+
+// 0.1 m grid on the ground, and the 0.5 x 0.5 m footprint limit
+scene.add(new THREE.GridHelper(2, 20, 0x555a63, 0x33373e));
+const sq = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.PlaneGeometry(0.5, 0.5)),
+  new THREE.LineDashedMaterial({ color: 0x4fd1c5, dashSize: 0.02, gapSize: 0.015 }));
+sq.rotation.x = -Math.PI / 2; sq.position.y = 0.001; sq.computeLineDistances();
+scene.add(sq);
+
+// URDF is z-up; three.js is y-up, so rotate the robot -90 deg about x
+const loader = new URDFLoader();
+loader.load('../urdf/bay_robot.urdf', robot => {
+  robot.rotation.x = -Math.PI / 2;
+  scene.add(robot);
+  window.robot = robot;
+  document.getElementById('status').textContent =
+    `${Object.keys(robot.links).length} links · ${Object.keys(robot.joints).length} joints loaded`;
+}, undefined, err => { document.getElementById('status').textContent = 'load error: ' + err; });
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+(function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+</script>
+</body>
+</html>
