@@ -23,8 +23,7 @@ setup(
     license='MIT',
     entry_points={
         'console_scripts': [
-            # nodes get added here as they are written, e.g.
-            # 'teleop_gui = pde4430_bay_robot.teleop_gui:main',
+            'arm_controller = pde4430_bay_robot.arm_controller:main',
         ],
     },
 )
