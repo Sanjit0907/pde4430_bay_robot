@@ -26,18 +26,23 @@ grep -q '# bay_robot shortcuts' /root/.bashrc || cat >> /root/.bashrc <<'EOF'
 source /opt/ros/jazzy/setup.bash
 source /root/ws/install/setup.bash 2>/dev/null
 export LIBGL_ALWAYS_SOFTWARE=1      # no GPU in Docker: Mesa software rendering
-TEST_WORLD=/root/ws/install/pde4430_bay_robot/share/pde4430_bay_robot/config/test_world.sdf
 
 # rebuild after editing files on Windows
 alias rebuild='(cd /root && colcon --log-base /root/ws/log build --base-paths /ws/src --build-base /root/ws/build --install-base /root/ws/install) && source /root/ws/install/setup.bash'
-# Gazebo + robot in the test arena (pass world:=... to use another world)
-alias sim='ros2 launch pde4430_bay_robot sim.launch.py world:=$TEST_WORLD'
+# assessment_bay world + robot on the start pad (add layout:=random etc.)
+alias sim='ros2 launch pde4430_bay_robot sim.launch.py'
 # RViz model viewer only
 alias model='ros2 launch pde4430_bay_robot display.launch.py'
 # keyboard driving: i=forward  j/l=turn  k=stop  z=slower
 alias teleop='ros2 run teleop_twist_keyboard teleop_twist_keyboard'
+# arm modes: arms fold | wide | large | straight | close
+arms() { ros2 topic pub --once /arm_mode std_msgs/msg/String "{data: $1}" > /dev/null && echo "arms -> $1"; }
+# put the three objects back (fixed layout) between attempts
+alias reset_objects='ros2 launch assessment_bay spawn_objects.launch.py'
+# ground-truth checker (testing only): which objects are in the bay
+alias baycheck='ros2 launch assessment_bay bay_checker.launch.py'
 
-echo "Commands:  sim | teleop | model | rviz2 | rqt_graph | rebuild"
+echo "Commands:  sim | teleop | arms <fold|wide|large|straight|close> | reset_objects | baycheck | model | rebuild"
 EOF
 
 # ---- open a terminal on the desktop to start in ----

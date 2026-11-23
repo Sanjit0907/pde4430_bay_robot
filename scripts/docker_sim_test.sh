@@ -1,128 +1,88 @@
 #!/usr/bin/env bash
-# docker_sim_test.sh - headless end-to-end test of the bay robot in ROS 2 Jazzy + Gazebo Harmonic.
+# docker_sim_test.sh - end-to-end test of the bay robot in the assessment_bay world.
 #
-# Run from Windows/macOS/Linux with Docker (workspace mounted at /ws):
-#   docker run --rm -v <path>/pde4430_ws:/ws osrf/ros:jazzy-desktop-full bash /ws/src/pde4430_bay_robot/scripts/docker_sim_test.sh
+# Runs in its OWN throwaway container from the bay_desktop image, so it never clashes
+# with a simulation you have open in the browser desktop:
+#   docker run --rm --network none --shm-size=2g -v <path>/pde4430_ws:/ws --entrypoint bash bay_desktop \
+#       /ws/src/pde4430_bay_robot/scripts/docker_sim_test.sh
+# (a virtual X display is started below for the LiDAR/camera rendering)
 #
-# Steps: build package -> check_urdf -> URDF->SDF conversion -> spawn in headless Gazebo
-#        -> drive forward and turn via /cmd_vel -> confirm /odom changes -> confirm /scan and camera publish.
+# Steps: rebuild -> URDF checks -> launch world + robot (Gazebo server only)
+#        -> spawn/footprint/arm/sensor checks -> delivery trials for all three objects.
 # note: no "set -u" - the ROS setup scripts reference unset variables
 source /opt/ros/jazzy/setup.bash
-export QT_QPA_PLATFORM=offscreen
-PASS=0; FAIL=0
-ok()   { echo "[PASS] $*"; PASS=$((PASS+1)); }
-bad()  { echo "[FAIL] $*"; FAIL=$((FAIL+1)); }
+export DISPLAY=:9 LIBGL_ALWAYS_SOFTWARE=1 QT_QPA_PLATFORM=offscreen
+# Isolate this test's ROS 2 and Gazebo traffic: containers on the same Docker network
+# otherwise discover each other and two simulations fight over /clock.
+export ROS_DOMAIN_ID=77 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+export GZ_PARTITION=bay_trials GZ_IP=127.0.0.1
+PKG=/ws/src/pde4430_bay_robot
+# private virtual display for sensor rendering
+rm -f /tmp/.X9-lock /tmp/.X11-unix/X9
+Xvnc :9 -geometry 1024x768 -depth 24 -SecurityTypes None -localhost > /tmp/xvnc.log 2>&1 &
+sleep 2
 
-# ---------- 1. build ----------
-cd /ws
-rm -rf build install log
-if colcon build --packages-select pde4430_bay_robot > /tmp/build.log 2>&1; then ok "colcon build"; else bad "colcon build"; cat /tmp/build.log; fi
-source /ws/install/setup.bash
-URDF=$(ros2 pkg prefix pde4430_bay_robot)/share/pde4430_bay_robot/urdf/bay_robot.urdf
+# stop anything left from an earlier run
+pkill -f "gz sim" ; pkill -f parameter_bridge ; pkill -f arm_controller ; pkill -f robot_state_publisher
+sleep 2
 
-# ---------- 2. URDF parser (urdfdom) ----------
-if command -v check_urdf >/dev/null; then
-  if check_urdf "$URDF" > /tmp/check.log 2>&1; then ok "check_urdf parses the model"; sed -n '1,30p' /tmp/check.log
-  else bad "check_urdf"; cat /tmp/check.log; fi
-fi
+# ---------- 1. build + URDF checks ----------
+cd /root && colcon --log-base /root/ws/log build --base-paths /ws/src \
+    --build-base /root/ws/build --install-base /root/ws/install > /tmp/build.log 2>&1 \
+    && echo "[PASS] colcon build" || { echo "[FAIL] colcon build"; tail -20 /tmp/build.log; exit 1; }
+source /root/ws/install/setup.bash
+python3 $PKG/scripts/check_urdf.py | grep -E "footprint|mass|PASSED|FAIL|  -"
+check_urdf $PKG/urdf/bay_robot.urdf > /dev/null 2>&1 && echo "[PASS] check_urdf (urdfdom)" || echo "[FAIL] check_urdf"
 
-# ---------- 3. URDF -> SDF conversion (what Gazebo actually loads) ----------
-if gz sdf -p "$URDF" > /tmp/robot.sdf 2>/tmp/sdf.err; then
-  ok "gz sdf converts URDF to SDF"
-  grep -q 'gz-sim-diff-drive-system' /tmp/robot.sdf && ok "diff-drive plugin present in SDF" || bad "diff-drive plugin missing"
-  grep -q 'gpu_lidar' /tmp/robot.sdf && ok "lidar sensor present in SDF" || bad "lidar missing"
-else bad "gz sdf conversion"; cat /tmp/sdf.err; fi
+# ---------- 2. launch world + robot ----------
+ros2 launch pde4430_bay_robot sim.launch.py headless:=true > /tmp/sim.log 2>&1 &
+echo "[INFO] waiting for world, objects and robot..."
+for i in $(seq 1 150); do
+  L=$(gz model --list 2>/dev/null)
+  echo "$L" | grep -q large_sphere && echo "$L" | grep -q small_sphere && echo "$L" | grep -q cylinder \
+    && echo "$L" | grep -q bay_robot && break
+  sleep 2
+done
+L=$(gz model --list 2>/dev/null)
+for m in bay_robot large_sphere small_sphere cylinder; do
+  echo "$L" | grep -q "$m" && echo "[PASS] $m present" || { echo "[FAIL] $m missing"; grep -iE "error|died" /tmp/sim.log | head; exit 1; }
+done
 
-# ---------- 4. headless Gazebo + spawn + bridge ----------
-export LIBGL_ALWAYS_SOFTWARE=1   # no GPU in Docker: use Mesa software rendering for lidar/camera
-WORLD=${WORLD:-$(ros2 pkg prefix pde4430_bay_robot)/share/pde4430_bay_robot/config/test_world.sdf}
-gz sim -s -r --headless-rendering "$WORLD" > /tmp/gz.log 2>&1 &
-sleep 10
-ros2 run robot_state_publisher robot_state_publisher --ros-args \
-  -p robot_description:="$(cat "$URDF")" -p use_sim_time:=true > /tmp/rsp.log 2>&1 &
-ros2 run ros_gz_sim create -file "$URDF" -name bay_robot -z 0.01 > /tmp/spawn.log 2>&1 \
-  && ok "robot spawned in Gazebo" || { bad "spawn"; cat /tmp/spawn.log; }
-ros2 run ros_gz_bridge parameter_bridge \
-  /cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist \
-  /odom@nav_msgs/msg/Odometry[gz.msgs.Odometry \
-  /scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan \
-  /camera/image_raw@sensor_msgs/msg/Image[gz.msgs.Image \
-  /joint_states@sensor_msgs/msg/JointState[gz.msgs.Model > /tmp/bridge.log 2>&1 &
-sleep 6
-
-# Python helper: read odom, drive, read again, report scan/camera
+# ---------- 3. spawn pose, arms, sensors ----------
 python3 - <<'EOF'
-import math, time, rclpy
+import math, re, subprocess, time, rclpy
 from rclpy.node import Node
-from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Twist
-from sensor_msgs.msg import LaserScan, Image
-
-rclpy.init()
-n = Node('sim_test')
-state = {'odom': None, 'scan': None, 'img': None}
-n.create_subscription(Odometry, '/odom', lambda m: state.__setitem__('odom', m), 10)
-n.create_subscription(LaserScan, '/scan', lambda m: state.__setitem__('scan', m), 10)
-n.create_subscription(Image, '/camera/image_raw', lambda m: state.__setitem__('img', m), 10)
-pub = n.create_publisher(Twist, '/cmd_vel', 10)
-
-def spin(sec):
-    end = time.time() + sec
-    while time.time() < end:
-        rclpy.spin_once(n, timeout_sec=0.05)
-
-def pose():
-    p = state['odom'].pose.pose
-    yaw = 2 * math.atan2(p.orientation.z, p.orientation.w)
-    return p.position.x, p.position.y, yaw
-
-def drive(lin, ang, sec):
-    t = Twist(); t.linear.x = lin; t.angular.z = ang
-    end = time.time() + sec
-    while time.time() < end:
-        pub.publish(t); rclpy.spin_once(n, timeout_sec=0.05)
-    pub.publish(Twist()); spin(1.0)
-
-import subprocess
-def ball_pose():
-    """Test-only: ask Gazebo where the test ball is (not used by the robot itself)."""
-    out = subprocess.run(['gz', 'model', '-m', 'ball', '-p'], capture_output=True, text=True).stdout
-    lines = [l.strip() for l in out.splitlines() if l.strip().startswith('[')]
-    return lines[0] if lines else out.strip()[-200:]
-
-spin(8)
-print(f'[INFO] ball xyz before push: {ball_pose()}')
-if state['odom'] is None:
-    print('[FAIL] no /odom received'); raise SystemExit
-x0, y0, th0 = pose()
-print(f'[INFO] start pose x={x0:.3f} y={y0:.3f} yaw={math.degrees(th0):.1f}')
-drive(0.2, 0.0, 3.0)
-x1, y1, th1 = pose()
-print(f'[INFO] after 3 s at 0.2 m/s: x={x1:.3f} y={y1:.3f} yaw={math.degrees(th1):.1f}  (ideal ~0.6 m)')
-print(('[PASS]' if x1 - x0 > 0.3 and abs(y1 - y0) < 0.05 else '[FAIL]') + ' drives straight forward on /cmd_vel')
-print(f'[INFO] ball xyz after push:  {ball_pose()}  (pushed if x > 0.6 and y ~ 0)')
-drive(0.0, 0.5, 3.0)
-x2, y2, th2 = pose()
-d = math.degrees(th2 - th1)
-print(f'[INFO] after 3 s at 0.5 rad/s: yaw change {d:.1f} deg (ideal ~86)')
-print(('[PASS]' if d > 40 else '[FAIL]') + ' turns on the spot on /cmd_vel')
-z = state['odom'].pose.pose.position.z
-print(f'[INFO] odom z = {z:.3f} (should stay ~0, robot not tipping)')
-
-s = state['scan']
-if s:
-    finite = [r for r in s.ranges if math.isfinite(r)]
-    print(f'[PASS] /scan publishing: {len(s.ranges)} beams, {len(finite)} hits (empty world -> few hits expected)')
-else:
-    print('[WARN] no /scan (gpu_lidar needs GPU/EGL rendering; may not work headless in Docker)')
-i = state['img']
-if i:
-    print(f'[PASS] camera publishing: {i.width}x{i.height} {i.encoding}')
-else:
-    print('[WARN] no camera image (needs rendering; may not work headless in Docker)')
-n.destroy_node(); rclpy.shutdown()
+from sensor_msgs.msg import JointState, LaserScan, Image
+rclpy.init(); n = Node('checks'); s = {}
+n.create_subscription(JointState, '/joint_states', lambda m: s.__setitem__('js', m), 10)
+n.create_subscription(LaserScan, '/scan', lambda m: s.__setitem__('scan', m), 10)
+n.create_subscription(Image, '/camera/image_raw', lambda m: s.__setitem__('img', m), 10)
+out = subprocess.run(['gz','model','-m','bay_robot','-p'], capture_output=True, text=True).stdout
+x, y, z = [[float(v) for v in g.split()] for g in re.findall(r'\[([-\d.e ]+)\]', out)
+           if len(g.split()) == 3][0]
+ok = abs(x) < 0.05 and abs(y + 2.6) < 0.05
+print(f"[{'PASS' if ok else 'FAIL'}] robot on start pad: ({x:+.3f}, {y:+.3f})")
+end = time.time() + 15
+while time.time() < end and not all(k in s for k in ('js', 'scan', 'img')):
+    rclpy.spin_once(n, timeout_sec=0.1)
+end = time.time() + 6          # give the arms time to deploy
+while time.time() < end: rclpy.spin_once(n, timeout_sec=0.1)
+if 'js' in s:
+    q = dict(zip(s['js'].name, s['js'].position))
+    l, r = q.get('left_arm_joint', -1), q.get('right_arm_joint', -1)
+    print(f"[{'PASS' if abs(l-2.094)<0.1 and abs(r-2.094)<0.1 else 'FAIL'}] arms deployed to 'wide': "
+          f"left {math.degrees(l):.0f} deg, right {math.degrees(r):.0f} deg (target 120)")
+else: print('[FAIL] no /joint_states')
+if 'scan' in s:
+    hits = [v for v in s['scan'].ranges if math.isfinite(v)]
+    print(f"[PASS] /scan: {len(hits)}/{len(s['scan'].ranges)} beams hit, nearest {min(hits):.2f} m")
+else: print('[FAIL] no /scan')
+print(f"[{'PASS' if 'img' in s else 'FAIL'}] camera " + (f"{s['img'].width}x{s['img'].height}" if 'img' in s else 'no image'))
 EOF
 
-echo "---- gazebo log (errors only) ----"
-grep -iE 'error|exception' /tmp/gz.log | head -20
-echo "---- summary: $PASS shell checks passed, $FAIL failed (see python lines above) ----"
+# ---------- 4. delivery trials ----------
+echo "[INFO] delivery trials (ground truth used by the TEST only)"
+python3 $PKG/scripts/bay_trials.py ${TRIALS:-}
+
+echo "---- gazebo errors ----"
+grep -iE "\[err|error" /tmp/sim.log | grep -viE "nvidia|libEGL|dri|glx" | head -10
