@@ -4,6 +4,9 @@
 
 # ---- virtual display (VNC only reachable inside the container) ----
 export DISPLAY=:1
+# Remove lock files left by a previous run; otherwise after "docker stop/start"
+# Xvnc exits with "Server is already active for display 1" and noVNC cannot connect.
+rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
 Xvnc :1 -geometry 1600x900 -depth 24 -SecurityTypes None -localhost -rfbport 5901 -AlwaysShared &
 sleep 2
 dbus-launch --exit-with-session startxfce4 > /tmp/xfce.log 2>&1 &
@@ -17,7 +20,9 @@ colcon --log-base /root/ws/log build --base-paths /ws/src \
     && echo "workspace built" || echo "BUILD FAILED - see /tmp/build.log"
 
 # ---- shell setup and shortcut commands for every terminal ----
-cat >> /root/.bashrc <<'EOF'
+# (only added once, so restarting the container does not duplicate them)
+grep -q '# bay_robot shortcuts' /root/.bashrc || cat >> /root/.bashrc <<'EOF'
+# bay_robot shortcuts
 source /opt/ros/jazzy/setup.bash
 source /root/ws/install/setup.bash 2>/dev/null
 export LIBGL_ALWAYS_SOFTWARE=1      # no GPU in Docker: Mesa software rendering
