@@ -140,11 +140,13 @@ class Trials(Node):
         super().__init__('bay_trials')
         self.cmd = self.create_publisher(Twist, '/cmd_vel', 10)
         self.arm = self.create_publisher(String, '/arm_mode', 10)
+        self.lift = self.create_publisher(String, '/lift_mode', 10)
         # Simulation time from /clock: Gazebo may run slower than real time (e.g. no GPU),
         # so all durations below are measured in simulated seconds.
         self.sim_t = None
         self.create_subscription(Clock, '/clock', self.on_clock, 10)
         self.arm_q = {}
+        self.wheel_v = {}
         self.create_subscription(JointState, '/joint_states', self.on_joints, 10)
         self.image = None
         self.create_subscription(Image, '/camera/image_raw',
@@ -176,8 +178,11 @@ class Trials(Node):
 
     def on_joints(self, msg):
         for n, q in zip(msg.name, msg.position):
-            if 'arm' in n:
+            if 'arm' in n or 'lift' in n:
                 self.arm_q[n] = q
+        for n, v in zip(msg.name, msg.velocity):
+            if 'wheel' in n:
+                self.wheel_v[n] = v
 
     def arms_deg(self):
         """Actual arm angles as 'L/R' in degrees outward from straight ahead."""
@@ -201,21 +206,30 @@ class Trials(Node):
         self.cmd.publish(Twist())
         self.sleep(settle)
 
-    def drive(self, v, w, until, timeout=300.0, stop=True):
-        """Publish (v, w) until until(robot_pose) is true or a wall timeout. Returns success.
-        stop=False keeps moving afterwards (needed while pushing a rolling sphere)."""
+    def drive(self, v, w, until, timeout=60.0, stop=True):
+        """Publish (v, w) until until(robot_pose) is true or `timeout` seconds of
+        SIMULATION time pass (a slow, contact-heavy simulation must not cut it short).
+        stop=False keeps moving afterwards (needed while pushing a rolling sphere).
+        Returns success; the last result is kept in self.last_drive for the log."""
         t = Twist()
         t.linear.x, t.angular.z = v, w
-        end = time.time() + timeout
-        while time.time() < end:
+        while self.sim_t is None:
+            rclpy.spin_once(self, timeout_sec=0.1)
+        t0, wall0 = self.sim_t, time.time()
+        end, wall_end = t0 + timeout, wall0 + 3600.0
+        ok = False
+        while self.sim_t < end and time.time() < wall_end:
             self.cmd.publish(t)
             rclpy.spin_once(self, timeout_sec=0.02)
             if until(gz_pose(ROBOT)):
-                if stop:
-                    self.stop(0.2)
-                return True
-        self.stop()
-        return False
+                ok = True
+                break
+        sim_dt, wall_dt = self.sim_t - t0, time.time() - wall0
+        self.last_drive = (f'{"ok" if ok else "TIMEOUT"} after {sim_dt:.0f} s sim '
+                           f'(RTF {sim_dt / max(wall_dt, 1e-3):.2f})')
+        if stop or not ok:
+            self.stop(0.2)
+        return ok
 
     def drive_for(self, v, w, sec, stop=True):
         """Publish (v, w) for `sec` seconds of simulation time (open loop)."""
@@ -234,6 +248,10 @@ class Trials(Node):
         self.arm.publish(String(data=mode))
         self.sleep(wait)
 
+    def set_lift(self, height, wait=2.5):
+        self.lift.publish(String(data=height))
+        self.sleep(wait)
+
     def in_jaws(self, obj):
         """Object position in the robot frame: (forward, lateral)."""
         rx, ry, _, _, _, ryaw = gz_pose(ROBOT)
@@ -250,6 +268,7 @@ class Trials(Node):
 
         # 1-2. setup: robot 1.5 m south of where the object will be
         self.stop()
+        self.set_lift('down', 1.0)        # lift must be down before the jaws may open
         self.set_arms(spec['pre'], 0.5)
         gz_set_pose(ROBOT, 0.0, -0.9, 0.05, math.pi / 2)
         self.sleep(1.0)
@@ -267,14 +286,25 @@ class Trials(Node):
                         lambda p: gap(p) <= spec['gap'], stop=not pushing)
         log.append(f'approach {"ok" if ok else "TIMEOUT"}')
 
-        # 4. carry mode (caged objects) / keep pushing to seat the sphere in the V
+        # 4. small objects: cage (centres it), grip (squeeze), lift = PICK UP
+        #    large sphere: keep pushing to seat it in the V
         if pushing:
             self.drive_for(0.10, 0.0, 1.5, stop=False)
         else:
-            self.set_arms(spec['mode'])
+            self.set_arms('close')
+            self.set_arms('grip', 2.0)
+            self.set_lift('carry')
         self.snapshot(f'{obj}_1_approach')
         f, l = self.in_jaws(obj)
         log.append(f'gripped at fwd {f:.2f} lat {l:+.2f} arms {self.arms_deg()}')
+        if not pushing:
+            self.sleep(2.0)
+            raised = gz_pose(obj)[2] - spec['z']
+            picked = raised > 0.05
+            log.append(f'robot z {gz_pose(ROBOT)[2]:+.3f} pitch {math.degrees(gz_pose(ROBOT)[4]):+.1f} deg')
+            log.append(f'lift joint {self.arm_q.get("lift_joint", float("nan")) * 100:.1f} cm, '
+                       f'object raised {raised * 100:+.1f} cm -> '
+                       f'{"PICKED UP" if picked else "NOT LIFTED"}')
 
         if spec['turns']:
             # 5a. caged objects: S-bend (~0.67 m radius), right then left, 26 deg each
@@ -289,8 +319,10 @@ class Trials(Node):
         self.snapshot(f'{obj}_2_carry')
         f, l = self.in_jaws(obj)
         if spec['turns']:
-            kept = 0.05 < f < 0.85 and abs(l) < 0.15
-            log.append(f'after {what} fwd {f:.2f} lat {l:+.2f} -> '
+            still_up = gz_pose(obj)[2] - spec['z'] > 0.05
+            kept = 0.05 < f < 0.85 and abs(l) < 0.15 and still_up
+            log.append(f'after {what} fwd {f:.2f} lat {l:+.2f} '
+                       f'{"still held up" if still_up else "DROPPED"} -> '
                        f'{"kept" if kept else "LOST"}')
         else:
             kept = True                    # judged only by where it ends up
@@ -298,9 +330,20 @@ class Trials(Node):
 
         # 6. deliver
         if spec['mode'] == 'close':
-            # caged: drive into the bay, open the arms (parallel arms fit), reverse out
+            # carried: drive into the bay, set it down, open the jaws (parallel jaws fit
+            # inside the 1.0 m bay), reverse out
             self.drive(0.12, 0.0, lambda p: p[1] >= spec['push_to'])
+            log.append(f'carry to bay {self.last_drive}')
+            rz, rp = gz_pose(ROBOT)[2], math.degrees(gz_pose(ROBOT)[4])
+            log.append(f'robot z {rz:+.3f} pitch {rp:+.1f} deg, wheel vel L/R '
+                       f'{self.wheel_v.get("left_wheel_joint", 0):.2f}/'
+                       f'{self.wheel_v.get("right_wheel_joint", 0):.2f} rad/s')
+            self.set_lift('down')
             self.set_arms('straight')
+            self.snapshot(f'{obj}_3_released')
+            log.append(f'released at y {gz_pose(obj)[1]:.2f} (robot {gz_pose(ROBOT)[1]:.2f}, '
+                       f'lift {self.arm_q.get("lift_joint", 0) * 100:.1f} cm, '
+                       f'jaws {self.arms_deg()})')
             self.drive(-0.15, 0.0, lambda p: p[1] <= 0.8)
             self.sleep(3.0)
         else:

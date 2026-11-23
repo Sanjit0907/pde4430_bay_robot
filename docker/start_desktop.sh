@@ -35,14 +35,16 @@ alias sim='ros2 launch pde4430_bay_robot sim.launch.py'
 alias model='ros2 launch pde4430_bay_robot display.launch.py'
 # keyboard driving: i=forward  j/l=turn  k=stop  z=slower
 alias teleop='ros2 run teleop_twist_keyboard teleop_twist_keyboard'
-# arm modes: arms fold | wide | large | straight | close
+# jaw modes: arms fold | wide | large | straight | close | grip
 arms() { ros2 topic pub --once /arm_mode std_msgs/msg/String "{data: $1}" > /dev/null && echo "arms -> $1"; }
+# lift: lift down | carry | up | <metres>
+lift() { ros2 topic pub --once /lift_mode std_msgs/msg/String "{data: '$1'}" > /dev/null && echo "lift -> $1"; }
 # put the three objects back (fixed layout) between attempts
 alias reset_objects='ros2 launch assessment_bay spawn_objects.launch.py'
 # ground-truth checker (testing only): which objects are in the bay
 alias baycheck='ros2 launch assessment_bay bay_checker.launch.py'
 
-echo "Commands:  sim | teleop | arms <fold|wide|large|straight|close> | reset_objects | baycheck | model | rebuild"
+echo "Commands:  sim | teleop | arms <fold|wide|large|straight|close|grip> | lift <down|carry|up> | reset_objects | baycheck | model | rebuild"
 EOF
 
 # ---- open a terminal on the desktop to start in ----

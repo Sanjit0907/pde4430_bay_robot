@@ -65,12 +65,25 @@ print(f"[{'PASS' if ok else 'FAIL'}] robot on start pad: ({x:+.3f}, {y:+.3f})")
 end = time.time() + 15
 while time.time() < end and not all(k in s for k in ('js', 'scan', 'img')):
     rclpy.spin_once(n, timeout_sec=0.1)
-end = time.time() + 6          # give the arms time to deploy
+# the jaws deploy 3 s of SIM time after start; poll (up to 60 s wall) until they arrive
+l = r = -1.0
+end = time.time() + 60
+while time.time() < end:
+    rclpy.spin_once(n, timeout_sec=0.1)
+    if 'js' in s:
+        q = dict(zip(s['js'].name, s['js'].position))
+        l, r = q.get('left_arm_joint', -1), q.get('right_arm_joint', -1)
+        if abs(l - 2.094) < 0.1 and abs(r - 2.094) < 0.1:
+            break
+from std_msgs.msg import String
+from rclpy.qos import QoSProfile, DurabilityPolicy
+n.create_subscription(String, '/arm_state', lambda m: s.__setitem__('arm_state', m.data),
+                      QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+end = time.time() + 5
 while time.time() < end: rclpy.spin_once(n, timeout_sec=0.1)
+print(f"[INFO] /arm_state = {s.get('arm_state')}")
 if 'js' in s:
-    q = dict(zip(s['js'].name, s['js'].position))
-    l, r = q.get('left_arm_joint', -1), q.get('right_arm_joint', -1)
-    print(f"[{'PASS' if abs(l-2.094)<0.1 and abs(r-2.094)<0.1 else 'FAIL'}] arms deployed to 'wide': "
+    print(f"[{'PASS' if abs(l-2.094)<0.1 and abs(r-2.094)<0.1 else 'FAIL'}] jaws deployed to 'wide': "
           f"left {math.degrees(l):.0f} deg, right {math.degrees(r):.0f} deg (target 120)")
 else: print('[FAIL] no /joint_states')
 if 'scan' in s:
@@ -86,3 +99,8 @@ python3 $PKG/scripts/bay_trials.py ${TRIALS:-}
 
 echo "---- gazebo errors ----"
 grep -iE "\[err|error" /tmp/sim.log | grep -viE "nvidia|libEGL|dri|glx" | head -10
+echo "---- gripper commands (arm_controller) ----"
+grep -E "Jaws ->|Lift ->|Refusing|Lowering" /tmp/sim.log | sed 's/.*\]: //' | tail -20
+echo "---- arm_controller output / errors ----"
+grep -E "arm_controller" /tmp/sim.log | grep -vE "Moved backwards" | sed 's/.*\]: //' | head -12
+grep -B2 -A8 "Traceback" /tmp/sim.log | head -30
