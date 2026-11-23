@@ -11,15 +11,24 @@
   * Differential-drive base, front + rear ball casters.
   * Low front BUMPER (0.02 - 0.24 m above the floor): pushes the cylinder below
     its centre of mass so it slides instead of tipping.
-  * Two motorised fold-out ARMS (0.02 - 0.30 m high, 0.44 m long, with a 0.40 m tall
-    post at each tip), pivoting at the bumper corners about a vertical axis:
-        folded (spawn)   q = 0.000 rad  arms lie back along the sides -> fits 0.5 x 0.5 m
+  * GRIPPER: two motorised fold-out JAWS (0.02 - 0.30 m high, 0.44 m long, a 0.40 m
+    post at each tip, black rubber grip pads on the inner faces), pivoting about
+    vertical axes at the bumper corners:
+        folded (spawn)   q = 0.000 rad  jaws lie back along the sides -> fits 0.5 x 0.5 m
         wide             q = 2.094 rad  60 deg outward: funnel to catch an object
         large            q = 2.531 rad  35 deg outward: a V that cradles the 0.6 m sphere
                                          (1 cm play) so it stays centred while pushed
-        close            q = 3.526 rad  22 deg inward: arms meet in front and enclose
+        close            q = 3.526 rad  22 deg inward: jaws meet in front and cage
                                          the small sphere or the cylinder (r 0.10 m)
-    Objects are only ever pushed / caged by contact - never attached.
+        grip             q = 3.840 rad  40 deg inward target, deliberately PAST where the
+                                         pads meet a 0.2 m object (~25-27 deg): the jaw
+                                         motors stay at their effort limit, so the squeeze
+                                         force is set by <limit effort> (5 N m), not by
+                                         how far the jaws happen to be from the target
+  * LIFT: both jaws ride on a carriage on a vertical prismatic joint (0 - 0.15 m), so a
+    gripped small sphere or cylinder can be PICKED UP, carried and set down.
+    Objects are held only by friction from squeezing - never attached. The 0.6 m
+    sphere is wider than the robot and is pushed in the V instead.
   * LiDAR on a mast at 0.35 m: above the arms and bumper, below the 0.5 m bay walls,
     and high enough to see the 0.4 m cylinder.
   * Camera on a pole at 0.72 m, tilted down, so it can see over the large sphere.
@@ -38,6 +47,9 @@
   <material name="wheel_black"><color rgba="0.08 0.08 0.08 1.0"/></material>
   <material name="sensor_blue"><color rgba="0.15 0.35 0.85 1.0"/></material>
   <material name="pole_grey"><color rgba="0.6 0.6 0.6 1.0"/></material>
+  <material name="rubber_black"><color rgba="0.05 0.05 0.05 1.0"/></material>
+  <material name="steel"><color rgba="0.78 0.80 0.83 1.0"/></material>
+  <material name="carriage_dark"><color rgba="0.18 0.19 0.22 1.0"/></material>
 
   <!-- ===================== base_footprint (ground frame) ===================== -->
   <link name="base_footprint"/>
@@ -172,7 +184,93 @@
     <origin xyz="0.09 0 0.08" rpy="0 0 0"/>
   </joint>
 
-  <!-- ===================== Fold-out arms ===================== -->
+  <!-- Rubber pad on the bumper face, 0.05 - 0.15 m above the floor, where the small
+       sphere and cylinder are pressed when gripped. The angled jaws touch a sphere
+       slightly ahead of its centre, so without grip here it can roll down and back
+       between the pads. The large sphere touches the bumper higher (~0.24 m) and
+       never reaches this pad. Separate link so it keeps its own friction. -->
+  <link name="bumper_pad">
+    <visual>
+      <geometry><box size="0.006 0.14 0.10"/></geometry>
+      <material name="rubber_black"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.006 0.14 0.10"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.01"/>
+      <inertia ixx="0.0000247" ixy="0" ixz="0" iyy="0.0000084" iyz="0" izz="0.0000164"/>
+    </inertial>
+  </link>
+  <joint name="bumper_pad_joint" type="fixed">
+    <parent link="bumper_link"/>
+    <child link="bumper_pad"/>
+    <origin xyz="0.013 0 -0.03" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ===================== Lift: rails + carriage ===================== -->
+  <!-- Two steel guide rails stand on the chassis just behind the bumper (0.125 - 0.31 m,
+       ending below the LiDAR scan plane). Visual only. -->
+  <link name="lift_rails">
+    <visual>
+      <origin xyz="0 0.155 0" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.008" length="0.185"/></geometry>
+      <material name="steel"/>
+    </visual>
+    <visual>
+      <origin xyz="0 -0.155 0" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.008" length="0.185"/></geometry>
+      <material name="steel"/>
+    </visual>
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0003" ixy="0" ixz="0" iyy="0.0003" iyz="0" izz="0.00001"/>
+    </inertial>
+  </link>
+  <joint name="lift_rails_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="lift_rails"/>
+    <origin xyz="0.07 0 0.1675" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Carriage: a crossbar on the rails (behind the bumper, 0.26 - 0.29 m) joined to two
+       hinge housings at the jaw pivots. The jaws hang from it, so raising the carriage
+       lifts both jaws and whatever they are gripping. Visual only (the jaws themselves
+       do all the contact work), but it carries the jaws' joints and mass. -->
+  <link name="lift_carriage">
+    <visual>
+      <origin xyz="0.005 0 0.125" rpy="0 0 0"/>
+      <geometry><box size="0.02 0.40 0.03"/></geometry>
+      <material name="carriage_dark"/>
+    </visual>
+    <visual>
+      <origin xyz="0.03 0.185 0.02" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.018" length="0.30"/></geometry>
+      <material name="carriage_dark"/>
+    </visual>
+    <visual>
+      <origin xyz="0.03 -0.185 0.02" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.018" length="0.30"/></geometry>
+      <material name="carriage_dark"/>
+    </visual>
+    <inertial>
+      <origin xyz="0.02 0 0.06" rpy="0 0 0"/>
+      <mass value="0.4"/>
+      <!-- approximated as a 0.04 x 0.40 x 0.30 box -->
+      <inertia ixx="0.00833" ixy="0" ixz="0" iyy="0.00305" iyz="0" izz="0.00539"/>
+    </inertial>
+  </link>
+  <joint name="lift_joint" type="prismatic">
+    <parent link="base_link"/>
+    <child link="lift_carriage"/>
+    <!-- carriage frame at the rails (x 0.07), at jaw-pivot height (0.16 m above floor) -->
+    <origin xyz="0.07 0 0.11" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0.0" upper="0.15" effort="100.0" velocity="0.2"/>
+    <dynamics damping="5.0" friction="0.0"/>
+  </joint>
+
+  <!-- ===================== Gripper jaws ===================== -->
   <!-- Each arm: plate 0.44 long x 0.02 thick x 0.28 high (0.02 - 0.30 m above floor).
        In the arm frame the plate extends along -x from the pivot, so at q = 0 the arm
        points backwards (folded). The left joint turns about -z and the right about +z,
@@ -209,11 +307,13 @@
     </inertial>
   </link>
   <joint name="left_arm_joint" type="revolute">
-    <parent link="base_link"/>
+    <parent link="lift_carriage"/>
     <child link="left_arm"/>
-    <origin xyz="0.10 0.185 0.11" rpy="0 0 0"/>
+    <origin xyz="0.03 0.185 0" rpy="0 0 0"/>  <!-- = (0.10, 0.185) from base_link -->
     <axis xyz="0 0 -1"/>
-    <limit lower="0.0" upper="3.6" effort="20.0" velocity="2.0"/>
+    <!-- effort = squeeze torque: 5 N m = ~25 N at a pad 0.2 m out, ~5x what the
+         0.5 kg cylinder needs (mu 0.5); harder squeezes jammed the physics solver -->
+    <limit lower="0.0" upper="3.9" effort="5.0" velocity="2.0"/>
     <dynamics damping="0.5" friction="0.0"/>
   </joint>
 
@@ -243,12 +343,60 @@
     </inertial>
   </link>
   <joint name="right_arm_joint" type="revolute">
-    <parent link="base_link"/>
+    <parent link="lift_carriage"/>
     <child link="right_arm"/>
-    <origin xyz="0.10 -0.185 0.11" rpy="0 0 0"/>
+    <origin xyz="0.03 -0.185 0" rpy="0 0 0"/>  <!-- = (0.10, -0.185) from base_link -->
     <axis xyz="0 0 1"/>
-    <limit lower="0.0" upper="3.6" effort="20.0" velocity="2.0"/>
+    <limit lower="0.0" upper="3.9" effort="5.0" velocity="2.0"/>
     <dynamics damping="0.5" friction="0.0"/>
+  </joint>
+
+  <!-- ===================== Grip pads ===================== -->
+  <!-- Black rubber pads (mu 1.5) on the jaws' inner faces, 0.05 - 0.20 m above the floor
+       (around the small sphere's equator and low on the cylinder). Each pad is turned
+       27 deg on its jaw, so that when the jaws close on a 0.2 m object (they stop at about
+       27 deg inward) the two pad faces are PARALLEL and press straight across the object's
+       middle - like a parallel-jaw gripper. With flat pads, the angled jaws pressed a sphere
+       slightly ahead of its centre and it rolled backwards out of the grip.
+       Placement solved for a 0.2 m object centred 0.21 m ahead: pad centre 0.134 m along the
+       jaw and 0.020 m in from its axis. Separate links on fixed joints that are not merged
+       (preserveFixedJoint), so they keep their own friction while the jaws stay slippery. -->
+  <link name="left_pad">
+    <visual>
+      <geometry><box size="0.12 0.012 0.15"/></geometry>
+      <material name="rubber_black"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.12 0.012 0.15"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.02"/>
+      <inertia ixx="0.0000378" ixy="0" ixz="0" iyy="0.0000615" iyz="0" izz="0.0000242"/>
+    </inertial>
+  </link>
+  <joint name="left_pad_joint" type="fixed">
+    <parent link="left_arm"/>
+    <child link="left_pad"/>
+    <origin xyz="-0.134 0.020 -0.035" rpy="0 0 0.4712"/>
+  </joint>
+
+  <link name="right_pad">
+    <visual>
+      <geometry><box size="0.12 0.012 0.15"/></geometry>
+      <material name="rubber_black"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.12 0.012 0.15"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.02"/>
+      <inertia ixx="0.0000378" ixy="0" ixz="0" iyy="0.0000615" iyz="0" izz="0.0000242"/>
+    </inertial>
+  </link>
+  <joint name="right_pad_joint" type="fixed">
+    <parent link="right_arm"/>
+    <child link="right_pad"/>
+    <origin xyz="-0.134 -0.020 -0.035" rpy="0 0 -0.4712"/>
   </joint>
 
   <!-- ===================== LiDAR mast ===================== -->
@@ -337,6 +485,13 @@
   <gazebo reference="bumper_link"><mu1>0.3</mu1><mu2>0.3</mu2></gazebo>
   <gazebo reference="left_arm"><mu1>0.1</mu1><mu2>0.1</mu2></gazebo>
   <gazebo reference="right_arm"><mu1>0.1</mu1><mu2>0.1</mu2></gazebo>
+  <!-- grip pads: high-friction rubber, kept as separate links -->
+  <gazebo reference="left_pad"><mu1>1.5</mu1><mu2>1.5</mu2></gazebo>
+  <gazebo reference="right_pad"><mu1>1.5</mu1><mu2>1.5</mu2></gazebo>
+  <gazebo reference="bumper_pad"><mu1>1.2</mu1><mu2>1.2</mu2></gazebo>
+  <gazebo reference="bumper_pad_joint"><preserveFixedJoint>true</preserveFixedJoint></gazebo>
+  <gazebo reference="left_pad_joint"><preserveFixedJoint>true</preserveFixedJoint></gazebo>
+  <gazebo reference="right_pad_joint"><preserveFixedJoint>true</preserveFixedJoint></gazebo>
 
   <gazebo>
     <!-- Differential drive: /cmd_vel (geometry_msgs/Twist) in, /odom + TF out.
@@ -381,7 +536,25 @@
       <cmd_min>-1.5</cmd_min>
     </plugin>
 
-    <!-- Wheel and arm angles on /joint_states -->
+    <!-- Lift: std_msgs/Float64 height (m, 0 - 0.15) on /lift/cmd_pos -->
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>lift_joint</joint_name>
+      <topic>lift/cmd_pos</topic>
+      <!-- force (PID) mode: the lift carries the jaws' weight, so it is driven with a
+           force that holds it against gravity (velocity mode did not move it) -->
+      <p_gain>3000</p_gain>
+      <i_gain>500</i_gain>
+      <d_gain>150</d_gain>
+      <i_max>30</i_max>
+      <i_min>-30</i_min>
+      <!-- force cap: ~3x the lifted weight (jaws + carriage + object ~ 16 N), so it
+           lifts smoothly instead of jerking the object -->
+      <cmd_max>45</cmd_max>
+      <cmd_min>-45</cmd_min>
+    </plugin>
+
+    <!-- Wheel, jaw and lift positions on /joint_states -->
     <plugin filename="gz-sim-joint-state-publisher-system"
             name="gz::sim::systems::JointStatePublisher">
       <topic>joint_states</topic>
