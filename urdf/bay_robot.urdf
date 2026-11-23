@@ -1,27 +1,43 @@
 <?xml version="1.0"?>
 <!--
   bay_robot.urdf
-  PDE4430 Mobile Robotics coursework - "Bay Pusher" robot.
+  PDE4430 Mobile Robotics coursework - "Bay Pusher" robot for the assessment_bay world.
 
-  Differential-drive base with a passive V-shaped cradle at the front.
-  The cradle funnels any object (large sphere, small sphere, upright cylinder)
-  towards its flat back plate so the object stays centred while being pushed.
-  Objects are moved ONLY by physical contact - no attach joints or pose plugins.
+  Design (sized for the assessment_bay objects):
+    large_sphere  d 0.60 m, 1.0 kg  - wider than the 0.5 m spawn footprint
+    small_sphere  d 0.20 m, 0.3 kg
+    cylinder      d 0.20 m x 0.40 m, CoM 0.20 m - tips if pushed above ~0.20 m
 
-  Coordinate convention (REP-103): x forward, y left, z up.
-  base_footprint sits on the ground; base_link sits at wheel-axle height.
+  * Differential-drive base, front + rear ball casters.
+  * Low front BUMPER (0.02 - 0.24 m above the floor): pushes the cylinder below
+    its centre of mass so it slides instead of tipping.
+  * Two motorised fold-out ARMS (0.02 - 0.30 m high, 0.44 m long, with a 0.40 m tall
+    post at each tip), pivoting at the bumper corners about a vertical axis:
+        folded (spawn)   q = 0.000 rad  arms lie back along the sides -> fits 0.5 x 0.5 m
+        wide             q = 2.094 rad  60 deg outward: funnel to catch an object
+        large            q = 2.531 rad  35 deg outward: a V that cradles the 0.6 m sphere
+                                         (1 cm play) so it stays centred while pushed
+        close            q = 3.526 rad  22 deg inward: arms meet in front and enclose
+                                         the small sphere or the cylinder (r 0.10 m)
+    Objects are only ever pushed / caged by contact - never attached.
+  * LiDAR on a mast at 0.35 m: above the arms and bumper, below the 0.5 m bay walls,
+    and high enough to see the 0.4 m cylinder.
+  * Camera on a pole at 0.72 m, tilted down, so it can see over the large sphere.
 
-  Overall size at spawn: 0.44 m (x) by 0.40 m (y)  -> fits 0.5 m x 0.5 m rule.
-
-  Gazebo section at the bottom targets Gazebo Harmonic (gz-sim, ROS 2 Jazzy).
+  Footprint at spawn: 0.45 m (x) by 0.39 m (y).
+  Convention (REP-103): x forward, y left, z up. base_footprint on the ground,
+  base_link at wheel-axle height (0.05 m).
+  Gazebo section at the bottom targets Gazebo Harmonic (ROS 2 Jazzy).
 -->
 <robot name="bay_robot">
 
   <!-- ===================== Materials (RViz colours) ===================== -->
   <material name="chassis_grey"><color rgba="0.25 0.27 0.30 1.0"/></material>
-  <material name="cradle_orange"><color rgba="0.95 0.50 0.10 1.0"/></material>
+  <material name="bumper_orange"><color rgba="0.95 0.50 0.10 1.0"/></material>
+  <material name="arm_yellow"><color rgba="0.98 0.78 0.15 1.0"/></material>
   <material name="wheel_black"><color rgba="0.08 0.08 0.08 1.0"/></material>
   <material name="sensor_blue"><color rgba="0.15 0.35 0.85 1.0"/></material>
+  <material name="pole_grey"><color rgba="0.6 0.6 0.6 1.0"/></material>
 
   <!-- ===================== base_footprint (ground frame) ===================== -->
   <link name="base_footprint"/>
@@ -29,34 +45,30 @@
   <joint name="base_joint" type="fixed">
     <parent link="base_footprint"/>
     <child link="base_link"/>
-    <!-- base_link at wheel axle height = wheel radius (0.05 m) -->
-    <origin xyz="0 0 0.05" rpy="0 0 0"/>
+    <origin xyz="0 0 0.05" rpy="0 0 0"/>  <!-- axle height = wheel radius -->
   </joint>
 
   <!-- ===================== Chassis ===================== -->
-  <!-- Box 0.30 x 0.30 x 0.10, spanning x = -0.20 .. +0.10.
-       Bottom 0.025 m above the ground, top at 0.125 m. -->
+  <!-- Box 0.24 x 0.26 x 0.10, x = -0.16 .. +0.08, 0.025 - 0.125 m above the floor -->
   <link name="base_link">
     <visual>
-      <origin xyz="-0.05 0 0.025" rpy="0 0 0"/>
-      <geometry><box size="0.30 0.30 0.10"/></geometry>
+      <origin xyz="-0.04 0 0.025" rpy="0 0 0"/>
+      <geometry><box size="0.24 0.26 0.10"/></geometry>
       <material name="chassis_grey"/>
     </visual>
     <collision>
-      <origin xyz="-0.05 0 0.025" rpy="0 0 0"/>
-      <geometry><box size="0.30 0.30 0.10"/></geometry>
+      <origin xyz="-0.04 0 0.025" rpy="0 0 0"/>
+      <geometry><box size="0.24 0.26 0.10"/></geometry>
     </collision>
     <inertial>
-      <origin xyz="-0.05 0 0.025" rpy="0 0 0"/>
+      <origin xyz="-0.04 0 0.025" rpy="0 0 0"/>
       <mass value="4.0"/>
-      <!-- solid box: Ixx = m/12 (y^2+z^2), etc. -->
-      <inertia ixx="0.03333" ixy="0" ixz="0" iyy="0.03333" iyz="0" izz="0.06"/>
+      <!-- solid box: Ixx = m/12 (y^2+z^2), Iyy = m/12 (x^2+z^2), Izz = m/12 (x^2+y^2) -->
+      <inertia ixx="0.02587" ixy="0" ixz="0" iyy="0.02253" iyz="0" izz="0.04173"/>
     </inertial>
   </link>
 
-  <!-- ===================== Drive wheels ===================== -->
-  <!-- Cylinder r = 0.05, width = 0.03. URDF cylinders point along z,
-       so roll by pi/2 to put the axis along y. Separation = 0.34 m. -->
+  <!-- ===================== Drive wheels (r 0.05, width 0.03, track 0.30) ===================== -->
   <link name="left_wheel">
     <visual>
       <origin xyz="0 0 0" rpy="1.5708 0 0"/>
@@ -70,15 +82,14 @@
     <inertial>
       <origin xyz="0 0 0" rpy="1.5708 0 0"/>
       <mass value="0.3"/>
-      <!-- solid cylinder (axis z): Ixx=Iyy = m/12 (3r^2+h^2), Izz = m r^2 / 2 -->
+      <!-- solid cylinder: Ixx = Iyy = m/12 (3r^2 + h^2), Izz = m r^2 / 2 -->
       <inertia ixx="0.000210" ixy="0" ixz="0" iyy="0.000210" iyz="0" izz="0.000375"/>
     </inertial>
   </link>
-
   <joint name="left_wheel_joint" type="continuous">
     <parent link="base_link"/>
     <child link="left_wheel"/>
-    <origin xyz="0 0.17 0" rpy="0 0 0"/>
+    <origin xyz="0 0.15 0" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <dynamics damping="0.01" friction="0.0"/>
   </joint>
@@ -99,132 +110,210 @@
       <inertia ixx="0.000210" ixy="0" ixz="0" iyy="0.000210" iyz="0" izz="0.000375"/>
     </inertial>
   </link>
-
   <joint name="right_wheel_joint" type="continuous">
     <parent link="base_link"/>
     <child link="right_wheel"/>
-    <origin xyz="0 -0.17 0" rpy="0 0 0"/>
+    <origin xyz="0 -0.15 0" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <dynamics damping="0.01" friction="0.0"/>
   </joint>
 
-  <!-- ===================== Rear caster (passive ball) ===================== -->
-  <link name="caster_link">
-    <visual>
-      <geometry><sphere radius="0.025"/></geometry>
-      <material name="wheel_black"/>
-    </visual>
-    <collision>
-      <geometry><sphere radius="0.025"/></geometry>
-    </collision>
+  <!-- ===================== Casters (front + rear, frictionless balls) ===================== -->
+  <!-- Radius 0.0245 with centre 0.025 m up: 0.5 mm above the floor, so the drive
+       wheels always carry the weight (traction) while the casters stop pitching. -->
+  <link name="rear_caster">
+    <visual><geometry><sphere radius="0.0245"/></geometry><material name="wheel_black"/></visual>
+    <collision><geometry><sphere radius="0.0245"/></geometry></collision>
     <inertial>
       <mass value="0.1"/>
-      <!-- solid sphere: I = 2/5 m r^2 -->
-      <inertia ixx="0.000025" ixy="0" ixz="0" iyy="0.000025" iyz="0" izz="0.000025"/>
+      <inertia ixx="0.000024" ixy="0" ixz="0" iyy="0.000024" iyz="0" izz="0.000024"/>
     </inertial>
   </link>
-
-  <joint name="caster_joint" type="fixed">
+  <joint name="rear_caster_joint" type="fixed">
     <parent link="base_link"/>
-    <child link="caster_link"/>
-    <!-- centre 0.025 m above ground = -0.025 relative to base_link -->
-    <origin xyz="-0.17 0 -0.025" rpy="0 0 0"/>
+    <child link="rear_caster"/>
+    <origin xyz="-0.13 0 -0.025" rpy="0 0 0"/>
   </joint>
 
-  <!-- ===================== Front V-cradle (pusher) ===================== -->
-  <!-- Three plates, 0.12 m tall, 0.01 m ground clearance (z 0.01..0.13).
-       back plate : flat, 0.16 m wide, at x = 0.11
-       side plates: 45 deg wings from (0.12, +-0.08) to (0.24, +-0.20)
-       The V centres round objects; the flat back gives the upright cylinder
-       a stable face to push against so it does not topple or spin away. -->
-  <link name="cradle_link">
-    <!-- back plate -->
+  <link name="front_caster">
+    <visual><geometry><sphere radius="0.0245"/></geometry><material name="wheel_black"/></visual>
+    <collision><geometry><sphere radius="0.0245"/></geometry></collision>
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.000024" ixy="0" ixz="0" iyy="0.000024" iyz="0" izz="0.000024"/>
+    </inertial>
+  </link>
+  <joint name="front_caster_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="front_caster"/>
+    <origin xyz="0.05 0 -0.025" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ===================== Front bumper ===================== -->
+  <!-- Plate 0.02 x 0.34 x 0.22, front face at x = 0.10, 0.02 - 0.24 m above the floor.
+       Pushes the cylinder low (contact centroid ~0.13 m < CoM 0.20 m) and meets the
+       large sphere just below its equator. -->
+  <link name="bumper_link">
     <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><box size="0.02 0.16 0.12"/></geometry>
-      <material name="cradle_orange"/>
+      <geometry><box size="0.02 0.34 0.22"/></geometry>
+      <material name="bumper_orange"/>
     </visual>
     <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><box size="0.02 0.16 0.12"/></geometry>
-    </collision>
-    <!-- left wing (length 0.17, rotated +45 deg about z) -->
-    <visual>
-      <origin xyz="0.07 0.14 0" rpy="0 0 0.7854"/>
-      <geometry><box size="0.17 0.02 0.12"/></geometry>
-      <material name="cradle_orange"/>
-    </visual>
-    <collision>
-      <origin xyz="0.07 0.14 0" rpy="0 0 0.7854"/>
-      <geometry><box size="0.17 0.02 0.12"/></geometry>
-    </collision>
-    <!-- right wing (rotated -45 deg about z) -->
-    <visual>
-      <origin xyz="0.07 -0.14 0" rpy="0 0 -0.7854"/>
-      <geometry><box size="0.17 0.02 0.12"/></geometry>
-      <material name="cradle_orange"/>
-    </visual>
-    <collision>
-      <origin xyz="0.07 -0.14 0" rpy="0 0 -0.7854"/>
-      <geometry><box size="0.17 0.02 0.12"/></geometry>
+      <geometry><box size="0.02 0.34 0.22"/></geometry>
     </collision>
     <inertial>
-      <origin xyz="0.05 0 0" rpy="0 0 0"/>
-      <mass value="0.6"/>
-      <!-- approximated as a 0.12 x 0.40 x 0.12 box -->
-      <inertia ixx="0.00872" ixy="0" ixz="0" iyy="0.00144" iyz="0" izz="0.00872"/>
+      <mass value="0.4"/>
+      <inertia ixx="0.00547" ixy="0" ixz="0" iyy="0.00163" iyz="0" izz="0.00387"/>
     </inertial>
   </link>
-
-  <joint name="cradle_joint" type="fixed">
+  <joint name="bumper_joint" type="fixed">
     <parent link="base_link"/>
-    <child link="cradle_link"/>
-    <!-- plate centre at x = 0.11, z = 0.07 above ground (= +0.02 from base_link) -->
-    <origin xyz="0.11 0 0.02" rpy="0 0 0"/>
+    <child link="bumper_link"/>
+    <origin xyz="0.09 0 0.08" rpy="0 0 0"/>
   </joint>
 
-  <!-- ===================== 2D Lidar ===================== -->
-  <link name="lidar_link">
+  <!-- ===================== Fold-out arms ===================== -->
+  <!-- Each arm: plate 0.44 long x 0.02 thick x 0.28 high (0.02 - 0.30 m above floor).
+       In the arm frame the plate extends along -x from the pivot, so at q = 0 the arm
+       points backwards (folded). The left joint turns about -z and the right about +z,
+       so the SAME positive angle opens both arms symmetrically:
+       arm direction = 180 deg - q, measured outward from straight ahead. -->
+  <link name="left_arm">
+    <!-- arm plate -->
     <visual>
-      <geometry><cylinder radius="0.04" length="0.05"/></geometry>
-      <material name="sensor_blue"/>
+      <origin xyz="-0.22 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.44 0.02 0.28"/></geometry>
+      <material name="arm_yellow"/>
     </visual>
     <collision>
-      <geometry><cylinder radius="0.04" length="0.05"/></geometry>
+      <origin xyz="-0.22 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.44 0.02 0.28"/></geometry>
     </collision>
+    <!-- tip post, 0.02 - 0.40 m above the floor: the large sphere's equator (0.30 m)
+         meets its flat side, so the push is horizontal. With the plate alone the
+         sphere met the plate's top edge exactly at its equator and climbed over it. -->
+    <visual>
+      <origin xyz="-0.43 0 0.05" rpy="0 0 0"/>
+      <geometry><box size="0.03 0.03 0.38"/></geometry>
+      <material name="arm_yellow"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.43 0 0.05" rpy="0 0 0"/>
+      <geometry><box size="0.03 0.03 0.38"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="-0.25 0 0" rpy="0 0 0"/>
+      <mass value="0.35"/>
+      <!-- plate + post, approximated -->
+      <inertia ixx="0.00270" ixy="0" ixz="0" iyy="0.00910" iyz="0" izz="0.00710"/>
+    </inertial>
+  </link>
+  <joint name="left_arm_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="left_arm"/>
+    <origin xyz="0.10 0.185 0.11" rpy="0 0 0"/>
+    <axis xyz="0 0 -1"/>
+    <limit lower="0.0" upper="3.6" effort="20.0" velocity="2.0"/>
+    <dynamics damping="0.5" friction="0.0"/>
+  </joint>
+
+  <link name="right_arm">
+    <visual>
+      <origin xyz="-0.22 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.44 0.02 0.28"/></geometry>
+      <material name="arm_yellow"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.22 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.44 0.02 0.28"/></geometry>
+    </collision>
+    <visual>
+      <origin xyz="-0.43 0 0.05" rpy="0 0 0"/>
+      <geometry><box size="0.03 0.03 0.38"/></geometry>
+      <material name="arm_yellow"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.43 0 0.05" rpy="0 0 0"/>
+      <geometry><box size="0.03 0.03 0.38"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="-0.25 0 0" rpy="0 0 0"/>
+      <mass value="0.35"/>
+      <inertia ixx="0.00270" ixy="0" ixz="0" iyy="0.00910" iyz="0" izz="0.00710"/>
+    </inertial>
+  </link>
+  <joint name="right_arm_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="right_arm"/>
+    <origin xyz="0.10 -0.185 0.11" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0.0" upper="3.6" effort="20.0" velocity="2.0"/>
+    <dynamics damping="0.5" friction="0.0"/>
+  </joint>
+
+  <!-- ===================== LiDAR mast ===================== -->
+  <!-- Mast 0.04 x 0.04, from the chassis top (0.125 m) to 0.325 m -->
+  <link name="mast_link">
+    <visual><geometry><box size="0.04 0.04 0.20"/></geometry><material name="pole_grey"/></visual>
+    <collision><geometry><box size="0.04 0.04 0.20"/></geometry></collision>
+    <inertial>
+      <mass value="0.2"/>
+      <inertia ixx="0.000693" ixy="0" ixz="0" iyy="0.000693" iyz="0" izz="0.0000533"/>
+    </inertial>
+  </link>
+  <joint name="mast_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="mast_link"/>
+    <origin xyz="-0.08 0 0.175" rpy="0 0 0"/>
+  </joint>
+
+  <!-- 2D LiDAR: scan plane 0.35 m above the floor (sees bay walls 0.5 m, obstacles,
+       cylinder 0.4 m and large sphere; the 0.2 m small sphere is found by camera) -->
+  <link name="lidar_link">
+    <visual><geometry><cylinder radius="0.04" length="0.05"/></geometry><material name="sensor_blue"/></visual>
+    <collision><geometry><cylinder radius="0.04" length="0.05"/></geometry></collision>
     <inertial>
       <mass value="0.2"/>
       <inertia ixx="0.000122" ixy="0" ixz="0" iyy="0.000122" iyz="0" izz="0.00016"/>
     </inertial>
   </link>
-
   <joint name="lidar_joint" type="fixed">
     <parent link="base_link"/>
     <child link="lidar_link"/>
-    <!-- sits on the chassis top (0.125 m) -> scan plane at 0.15 m above ground -->
-    <origin xyz="-0.08 0 0.10" rpy="0 0 0"/>
+    <origin xyz="-0.08 0 0.30" rpy="0 0 0"/>
   </joint>
 
-  <!-- ===================== Camera (tilted down at the floor strip) ===================== -->
+  <!-- ===================== Camera pole + camera ===================== -->
+  <!-- Thin pole behind the LiDAR (0.07 m away: inside the LiDAR's 0.12 m minimum
+       range, so it does not show up in scans), 0.125 - 0.70 m above the floor -->
+  <link name="camera_pole">
+    <visual><geometry><box size="0.02 0.02 0.575"/></geometry><material name="pole_grey"/></visual>
+    <collision><geometry><box size="0.02 0.02 0.575"/></geometry></collision>
+    <inertial>
+      <mass value="0.15"/>
+      <inertia ixx="0.00413" ixy="0" ixz="0" iyy="0.00413" iyz="0" izz="0.00001"/>
+    </inertial>
+  </link>
+  <joint name="camera_pole_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_pole"/>
+    <origin xyz="-0.15 0 0.3625" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Camera 0.72 m up, pitched down 0.55 rad (~31 deg): sees the jaws and, over the
+       top of the large sphere, the floor further ahead (yellow strip, objects) -->
   <link name="camera_link">
-    <visual>
-      <geometry><box size="0.03 0.06 0.03"/></geometry>
-      <material name="sensor_blue"/>
-    </visual>
-    <collision>
-      <geometry><box size="0.03 0.06 0.03"/></geometry>
-    </collision>
+    <visual><geometry><box size="0.03 0.06 0.03"/></geometry><material name="sensor_blue"/></visual>
+    <collision><geometry><box size="0.03 0.06 0.03"/></geometry></collision>
     <inertial>
       <mass value="0.05"/>
       <inertia ixx="0.000019" ixy="0" ixz="0" iyy="0.0000075" iyz="0" izz="0.000019"/>
     </inertial>
   </link>
-
   <joint name="camera_joint" type="fixed">
     <parent link="base_link"/>
     <child link="camera_link"/>
-    <!-- front-top of chassis, pitched down 0.35 rad (~20 deg) -->
-    <origin xyz="0.07 0 0.105" rpy="0 0.35 0"/>
+    <origin xyz="-0.13 0 0.67" rpy="0 0.55 0"/>
   </joint>
 
   <!-- Optical frame: z forward, x right, y down (what image consumers expect) -->
@@ -239,31 +328,28 @@
        GAZEBO (Harmonic / gz-sim) - physics, plugins and sensors
        ===================================================================== -->
 
-  <!-- Friction: grippy wheels, frictionless caster, low-friction cradle so
-       spheres roll into the V centre instead of being dragged sideways. -->
-  <gazebo reference="left_wheel">
-    <mu1>1.0</mu1><mu2>1.0</mu2>
-  </gazebo>
-  <gazebo reference="right_wheel">
-    <mu1>1.0</mu1><mu2>1.0</mu2>
-  </gazebo>
-  <gazebo reference="caster_link">
-    <mu1>0.0</mu1><mu2>0.0</mu2>
-  </gazebo>
-  <gazebo reference="cradle_link">
-    <mu1>0.2</mu1><mu2>0.2</mu2>
-  </gazebo>
+  <!-- Friction: grippy wheels, frictionless casters; low-friction bumper and arms so
+       objects slide along them into the centre instead of being dragged sideways -->
+  <gazebo reference="left_wheel"><mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
+  <gazebo reference="right_wheel"><mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
+  <gazebo reference="rear_caster"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+  <gazebo reference="front_caster"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+  <gazebo reference="bumper_link"><mu1>0.3</mu1><mu2>0.3</mu2></gazebo>
+  <gazebo reference="left_arm"><mu1>0.1</mu1><mu2>0.1</mu2></gazebo>
+  <gazebo reference="right_arm"><mu1>0.1</mu1><mu2>0.1</mu2></gazebo>
 
-  <!-- Differential drive: subscribes to /cmd_vel (geometry_msgs/Twist),
-       publishes /odom and the odom -> base_footprint TF. -->
   <gazebo>
+    <!-- Differential drive: /cmd_vel (geometry_msgs/Twist) in, /odom + TF out.
+         Gentle acceleration limits so pushed objects are not flung ahead. -->
     <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
       <left_joint>left_wheel_joint</left_joint>
       <right_joint>right_wheel_joint</right_joint>
-      <wheel_separation>0.34</wheel_separation>
+      <wheel_separation>0.30</wheel_separation>
       <wheel_radius>0.05</wheel_radius>
-      <max_linear_acceleration>1.0</max_linear_acceleration>
-      <max_angular_acceleration>2.0</max_angular_acceleration>
+      <max_linear_acceleration>0.5</max_linear_acceleration>
+      <max_angular_acceleration>1.5</max_angular_acceleration>
+      <max_linear_velocity>0.5</max_linear_velocity>
+      <max_angular_velocity>1.5</max_angular_velocity>
       <topic>cmd_vel</topic>
       <odom_topic>odom</odom_topic>
       <frame_id>odom</frame_id>
@@ -272,13 +358,37 @@
       <odom_publish_frequency>30</odom_publish_frequency>
     </plugin>
 
+    <!-- Arm position controllers: std_msgs/Float64 angle (rad) on
+         /left_arm/cmd_pos and /right_arm/cmd_pos (0 = folded, see table above).
+         Velocity-command mode: the joint is driven at p_gain * error, capped at
+         cmd_max rad/s - smooth and independent of arm inertia. -->
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>left_arm_joint</joint_name>
+      <topic>left_arm/cmd_pos</topic>
+      <use_velocity_commands>true</use_velocity_commands>
+      <p_gain>3.0</p_gain>
+      <cmd_max>1.5</cmd_max>
+      <cmd_min>-1.5</cmd_min>
+    </plugin>
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>right_arm_joint</joint_name>
+      <topic>right_arm/cmd_pos</topic>
+      <use_velocity_commands>true</use_velocity_commands>
+      <p_gain>3.0</p_gain>
+      <cmd_max>1.5</cmd_max>
+      <cmd_min>-1.5</cmd_min>
+    </plugin>
+
+    <!-- Wheel and arm angles on /joint_states -->
     <plugin filename="gz-sim-joint-state-publisher-system"
             name="gz::sim::systems::JointStatePublisher">
       <topic>joint_states</topic>
     </plugin>
   </gazebo>
 
-  <!-- 2D lidar: 360 samples, 0.12 - 8 m, published on /scan -->
+  <!-- 2D LiDAR: 360 samples, 0.12 - 8 m, /scan -->
   <gazebo reference="lidar_link">
     <sensor name="lidar" type="gpu_lidar">
       <topic>scan</topic>
@@ -295,21 +405,13 @@
             <max_angle>3.14159</max_angle>
           </horizontal>
         </scan>
-        <range>
-          <min>0.12</min>
-          <max>8.0</max>
-          <resolution>0.01</resolution>
-        </range>
-        <noise>
-          <type>gaussian</type>
-          <mean>0.0</mean>
-          <stddev>0.01</stddev>
-        </noise>
+        <range><min>0.12</min><max>8.0</max><resolution>0.01</resolution></range>
+        <noise><type>gaussian</type><mean>0.0</mean><stddev>0.01</stddev></noise>
       </lidar>
     </sensor>
   </gazebo>
 
-  <!-- RGB camera: 640x480 @ 15 Hz on /camera/image_raw -->
+  <!-- RGB camera: 640x480 @ 15 Hz, /camera/image_raw -->
   <gazebo reference="camera_link">
     <sensor name="camera" type="camera">
       <topic>camera/image_raw</topic>
@@ -318,15 +420,8 @@
       <always_on>true</always_on>
       <camera>
         <horizontal_fov>1.3963</horizontal_fov>
-        <image>
-          <width>640</width>
-          <height>480</height>
-          <format>R8G8B8</format>
-        </image>
-        <clip>
-          <near>0.05</near>
-          <far>10.0</far>
-        </clip>
+        <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+        <clip><near>0.05</near><far>12.0</far></clip>
       </camera>
     </sensor>
   </gazebo>
