@@ -1,52 +1,75 @@
-"""sim.launch.py - spawn the bay robot in Gazebo (Harmonic) and bridge topics to ROS 2.
+"""sim.launch.py - assessment_bay world + bay robot on the start pad, bridged to ROS 2.
 
-    ros2 launch pde4430_bay_robot sim.launch.py world:=/path/to/assessment_bay.sdf x:=0 y:=0
+    ros2 launch pde4430_bay_robot sim.launch.py
+    ros2 launch pde4430_bay_robot sim.launch.py layout:=random seed:=42
+    ros2 launch pde4430_bay_robot sim.launch.py render_engine:=ogre2 rviz:=true
 
-Bridged topics:
-    /cmd_vel            ROS -> Gazebo   geometry_msgs/Twist     (drive the robot)
-    /odom               Gazebo -> ROS   nav_msgs/Odometry
-    /tf                 Gazebo -> ROS   odom -> base_footprint
-    /joint_states       Gazebo -> ROS   wheel angles
-    /scan               Gazebo -> ROS   sensor_msgs/LaserScan
-    /camera/image_raw   Gazebo -> ROS   sensor_msgs/Image
-    /clock              Gazebo -> ROS   simulation time
+Arguments (the first five are passed straight to assessment_bay.launch.py)
+    render_engine   ogre (default, works in VMs/Docker) or ogre2
+    layout          fixed (default) or random object layout
+    seed            seed for layout:=random (-1 = new each run)
+    spawn_objects   true (default) / false
+    headless        true = Gazebo server only, no window
+    deploy_mode     arm mode to open to after spawning (default: wide)
+    rviz            true = also open RViz
+
+Nodes started
+    gz sim (via assessment_bay)  the world and physics
+    robot_state_publisher        TF for the robot's links from the URDF + /joint_states
+    ros_gz_sim create            spawns the robot on the start pad (0, -2.6), facing the bay
+    ros_gz_bridge                Gazebo <-> ROS topics (table below)
+    arm_controller               named arm modes on /arm_mode -> arm joint targets
+
+Bridged topics ( ] = ROS->Gazebo, [ = Gazebo->ROS )
+    /cmd_vel             geometry_msgs/Twist     drive commands
+    /left_arm/cmd_pos    std_msgs/Float64        left arm angle (rad)
+    /right_arm/cmd_pos   std_msgs/Float64        right arm angle (rad)
+    /odom                nav_msgs/Odometry       wheel odometry
+    /tf                  tf2_msgs/TFMessage      odom -> base_footprint
+    /joint_states        sensor_msgs/JointState  wheel + arm angles
+    /scan                sensor_msgs/LaserScan   LiDAR
+    /camera/image_raw    sensor_msgs/Image       camera
+    /clock               rosgraph_msgs/Clock     simulation time
 """
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+# Start pad from the assessment_bay README / bay_layout.py
+START_X, START_Y, START_YAW = '0.0', '-2.6', '1.5708'
+
 
 def generate_launch_description():
     pkg_share = get_package_share_directory('pde4430_bay_robot')
-    gz_sim_share = get_package_share_directory('ros_gz_sim')
+    world_share = get_package_share_directory('assessment_bay')
 
     with open(os.path.join(pkg_share, 'urdf', 'bay_robot.urdf'), 'r') as f:
         robot_description = f.read()
 
-    # ---- Launch arguments: world file and spawn pose ----
-    world = LaunchConfiguration('world')
-    x, y, yaw = LaunchConfiguration('x'), LaunchConfiguration('y'), LaunchConfiguration('yaw')
-
-    declare_args = [
-        DeclareLaunchArgument('world', default_value='empty.sdf',
-                              description='Gazebo world (use the assessment_bay world)'),
-        DeclareLaunchArgument('x', default_value='0.0'),
-        DeclareLaunchArgument('y', default_value='0.0'),
-        DeclareLaunchArgument('yaw', default_value='0.0'),
+    # ---- arguments ----
+    world_args = ['render_engine', 'layout', 'seed', 'spawn_objects', 'headless']
+    defaults = {'render_engine': 'ogre', 'layout': 'fixed', 'seed': '-1',
+                'spawn_objects': 'true', 'headless': 'false'}
+    declare = [DeclareLaunchArgument(a, default_value=defaults[a]) for a in world_args]
+    declare += [
+        DeclareLaunchArgument('deploy_mode', default_value='wide',
+                              description='arm mode after spawn: fold/wide/large/straight/close'),
+        DeclareLaunchArgument('rviz', default_value='false'),
     ]
 
-    # ---- Gazebo server + GUI, running (-r) the chosen world ----
-    gazebo = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(gz_sim_share, 'launch', 'gz_sim.launch.py')),
-        launch_arguments={'gz_args': ['-r ', world]}.items(),
+    # ---- the provided world (Gazebo + the three objects) ----
+    world = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(world_share, 'launch', 'assessment_bay.launch.py')),
+        launch_arguments={a: LaunchConfiguration(a) for a in world_args}.items(),
     )
 
-    # ---- Publishes TF for the robot's fixed links from the URDF ----
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
@@ -54,21 +77,22 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ---- Spawn the URDF into Gazebo from the robot_description topic ----
+    # Spawn 5 cm above the start pad, facing +y (towards the bay), arms folded.
     spawn = Node(
         package='ros_gz_sim',
         executable='create',
         arguments=['-topic', 'robot_description', '-name', 'bay_robot',
-                   '-x', x, '-y', y, '-z', '0.01', '-Y', yaw],
+                   '-x', START_X, '-y', START_Y, '-z', '0.05', '-Y', START_YAW],
         output='screen',
     )
 
-    # ---- ROS <-> Gazebo topic bridge ( ] = ROS->GZ, [ = GZ->ROS ) ----
     bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
         arguments=[
             '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
+            '/left_arm/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+            '/right_arm/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
             '/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
             '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
             '/joint_states@sensor_msgs/msg/JointState[gz.msgs.Model',
@@ -76,7 +100,23 @@ def generate_launch_description():
             '/camera/image_raw@sensor_msgs/msg/Image[gz.msgs.Image',
             '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
         ],
+        parameters=[{'use_sim_time': True}],
         output='screen',
     )
 
-    return LaunchDescription(declare_args + [gazebo, robot_state_publisher, spawn, bridge])
+    arm_controller = Node(
+        package='pde4430_bay_robot',
+        executable='arm_controller',
+        parameters=[{'use_sim_time': True,
+                     'deploy_mode': LaunchConfiguration('deploy_mode')}],
+        output='screen',
+    )
+
+    rviz = Node(
+        package='rviz2', executable='rviz2',
+        parameters=[{'use_sim_time': True}],
+        condition=IfCondition(LaunchConfiguration('rviz')),
+    )
+
+    return LaunchDescription(declare + [world, robot_state_publisher, spawn, bridge,
+                                        arm_controller, rviz])
