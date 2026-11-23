@@ -2,9 +2,9 @@
 
 Coursework for **PDE4430 Mobile Robotics** (Middlesex University Dubai, 2026–27).
 
-A differential-drive robot with a low front bumper and two **motorised fold-out arms**. It delivers the large sphere, the small sphere and the upright cylinder of the [`assessment_bay`](https://github.com/sameerkishore/ros2_assessment_world) world through the bay opening, using **physical contact only**. No joints, plugins or services attach objects or set their pose.
+A differential-drive robot with a low front bumper and a **fold-out gripper on a lift**: two motorised jaws with rubber grip pads, which push, cage or **pick up** objects. It delivers the large sphere, the small sphere and the upright cylinder of the [`assessment_bay`](https://github.com/sameerkishore/ros2_assessment_world) world through the bay opening, using **physical contact only**. No joints, plugins or services attach objects or set their pose.
 
-> Status: robot design, Gazebo integration, arm control and scripted delivery trials done. Teleoperation GUI and autonomy are in progress.
+> Status: robot design, gripper and lift, Gazebo integration, gripper control and scripted delivery trials done. Teleoperation GUI and autonomy are in progress.
 
 ---
 
@@ -29,13 +29,15 @@ From the `assessment_bay` package:
 |---|---|---|
 | Base | Differential drive, 0.24 × 0.26 m chassis, wheels r 0.05 m on a 0.30 m track. Front and rear ball casters | Turns on the spot for small, precise corrections. Two casters stop it pitching when the arms are out |
 | Bumper | Plate 0.34 m wide, **0.02–0.24 m** above the floor | Pushes the cylinder with its contact centroid at ~0.13 m, below its 0.20 m CoM, so it slides instead of tipping. Meets the large sphere just under its equator |
-| **Fold-out arms** | Two 0.44 m plates, 0.02–0.30 m high, pivoting about vertical axes at the bumper corners. Driven by Gazebo joint position controllers | Folded back along the sides at spawn (0.44 × 0.39 m footprint). Swing out after spawn to guide or cage each object (modes below) |
-| Friction | Wheels μ 1.0, casters 0, bumper 0.3, arms 0.1 | Objects slide along the arms into the centre instead of being dragged sideways |
+| **Gripper jaws** | Two 0.44 m plates, 0.02–0.30 m high, pivoting about vertical axes at the bumper corners, with a 0.40 m post at each tip. Driven by Gazebo joint position controllers (effort limit 5 N·m, about 25 N squeeze at the pads) | Folded back along the sides at spawn (0.451 × 0.475 m footprint). Swing out after spawn to guide, cage or grip each object (modes below) |
+| **Grip pads** | Black rubber pads (μ 1.5), 0.12 × 0.15 m, 0.05–0.20 m above the floor, mounted **turned 27°** on the jaws, plus a rubber pad on the bumper face | When the jaws close on a 0.2 m object (they stop at about 27° inward), the two pad faces are **parallel** and press straight across its middle, like a parallel-jaw gripper, so a sphere cannot roll out. Separate links on preserved fixed joints, so they grip while the rest of each jaw stays slippery for guiding |
+| **Lift** | Carriage on two steel rails, prismatic joint 0–0.15 m, PID force control | Raises both jaws, so a gripped small sphere or cylinder is **picked up** and carried clear of the floor, then set down in the bay |
+| Friction | Wheels μ 1.0, casters 0, bumper 0.3, jaws 0.1, pads 1.5 | Objects slide along the jaws into the centre, and the pads hold them when squeezed |
 | LiDAR | 360°, 0.12–8 m, on a mast, scan plane **0.35 m** | Above the arms and bumper so they don't block it. Below the 0.5 m bay walls, and sees the 0.4 m cylinder and the large sphere |
 | Camera | 640×480, on a pole at **0.72 m**, tilted 31° down | Sees the jaws and, over the top of the 0.6 m sphere, the yellow strip and objects ahead |
 | Motion limits | 0.5 m/s, 0.5 m/s², 1.5 rad/s | Gentle acceleration so pushed spheres aren't flung ahead |
 
-Total mass 6.4 kg. Inertias use the solid-body formulas (comments in the URDF).
+Total mass 7.0 kg. Inertias use the solid-body formulas (comments in the URDF).
 
 ### Arm modes
 
@@ -48,11 +50,22 @@ Angles are measured outward from straight ahead. They come from the object sizes
 | `large` | 2.531 | 35° out | **V cradle** for the 0.6 m sphere (~1 cm play). Two long arm faces push it from behind its widest point, which keeps it centred while it is pushed straight |
 | `straight` | 3.142 | 0° | Arms parallel. Releasing a small object inside the bay without hitting the bay walls |
 | `close` | 3.526 | 22° in | Arms meet in front (2 cm gap): a cage for the 0.2 m sphere or cylinder (room for r = 0.117 m) |
+| `grip` | 3.840 | 40° in (target) | The pads meet a 0.2 m object at about 27°. The target is deliberately past that, so the motors stay at their 5 N·m limit and the squeeze is the same for every object |
+
+Lift heights (`/lift_mode`): `down` 0 m, `carry` 0.08 m, `up` 0.15 m, or any height in metres.
+
+**Safety rules in `arm_controller`:** the jaws can only open (any mode except `grip`/`close`) while the lift is down, so a lifted object is never dropped by accident. `fold` while lifted lowers the lift first. All targets are clamped to the joint limits.
 
 ### Delivery strategy
 
 - **Large sphere:** set `large` (V). First drive round to the far side of the sphere so that the robot, the sphere and the target are in a line. Then drive slowly into it so it settles in the V, and push **straight** without stopping. For the bay, line up with the opening and push until the robot is about 0.7 m short of the yellow strip (the V is 0.9 m wide, nearly as wide as the 1.0 m opening). Then stop: the sphere keeps rolling straight into the bay and stops at the back wall. If it drifts, back off and line up again rather than turning while pushing.
-- **Small sphere / cylinder:** open `wide` and drive up slowly. **Stop before the bumper touches the object**: a sphere that is bumped rolls away at the robot's speed. Then switch to `close`. The arms swing in around it and it is caged. Drive into the bay, switch to `straight`, and reverse out. The object stays behind.
+- **Small sphere / cylinder (pick and place):** open `wide` and drive up slowly. **Stop before the bumper touches the object**: a sphere that is bumped rolls away at the robot's speed. Then:
+  1. `close`: the jaws swing in around it and centre it.
+  2. `grip`: the pads squeeze it.
+  3. Lift `carry`: it is picked up off the floor.
+  4. Drive into the bay (turns are fine, it is held).
+  5. Lift `down`, then `straight` to release, and reverse out.
+- **Why not pick up the large sphere?** It is 0.6 m wide, wider than the robot. Jaws that fold inside the 0.5 m spawn square cannot reach around it, so it is pushed in the V.
 
 *Design history (from the trials in section 7):*
 1. **Catching from `wide`, then closing to 35°** squeezed the sphere forward out of the V, because the arms touch it behind its widest point. Fix: put the arms at 35° *before* reaching the sphere and drive into it.
@@ -67,7 +80,7 @@ pde4430_bay_robot/
 ├── urdf/bay_robot.urdf              robot model, Gazebo plugins and sensors
 ├── launch/sim.launch.py             assessment_bay world + robot + bridge + arm controller
 ├── launch/display.launch.py         view the model in RViz (sliders for the arms)
-├── pde4430_bay_robot/arm_controller.py   named arm modes -> joint targets
+├── pde4430_bay_robot/arm_controller.py   gripper: jaw modes + lift heights -> joint targets
 ├── scripts/check_urdf.py            offline URDF checks (tree, inertia, footprint)
 ├── scripts/bay_trials.py            scripted delivery trials (testing only)
 ├── scripts/docker_sim_test.sh       full end-to-end test in Docker
@@ -105,7 +118,8 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 
 **Arms** (third terminal):
 ```bash
-ros2 topic pub --once /arm_mode std_msgs/msg/String "{data: large}"   # fold|wide|large|straight|close
+ros2 topic pub --once /arm_mode std_msgs/msg/String "{data: grip}"    # fold|wide|large|straight|close|grip
+ros2 topic pub --once /lift_mode std_msgs/msg/String "{data: carry}"  # down|carry|up or metres
 ```
 
 **Reset objects / check results** (from `assessment_bay`; the checker is for testing only):
@@ -119,9 +133,9 @@ ros2 launch assessment_bay bay_checker.launch.py
 ```
 teleop_twist_keyboard --/cmd_vel--------------------+
                                                      v
-arm_controller --/left_arm/cmd_pos, /right_arm/cmd_pos--> ros_gz_bridge <==> Gazebo (assessment_bay + bay_robot)
+arm_controller --/left_arm/cmd_pos, /right_arm/cmd_pos, /lift/cmd_pos--> ros_gz_bridge <==> Gazebo (assessment_bay + bay_robot)
      ^                                               |
-  /arm_mode (String)        /odom /tf /joint_states /scan /camera/image_raw /clock
+  /arm_mode, /lift_mode     /odom /tf /joint_states /scan /camera/image_raw /clock
                                                      v
                                      robot_state_publisher -> /tf (robot links), RViz
 ```
@@ -129,8 +143,10 @@ arm_controller --/left_arm/cmd_pos, /right_arm/cmd_pos--> ros_gz_bridge <==> Gaz
 | Topic | Type | Direction | Purpose |
 |---|---|---|---|
 | `/cmd_vel` | `geometry_msgs/Twist` | ROS → Gazebo | drive commands to the diff-drive plugin |
-| `/arm_mode` | `std_msgs/String` | user → `arm_controller` | `fold`, `wide`, `large`, `straight` or `close` |
-| `/arm_state` | `std_msgs/String` (latched) | `arm_controller` → | current arm mode |
+| `/arm_mode` | `std_msgs/String` | user → `arm_controller` | jaw mode: `fold`, `wide`, `large`, `straight`, `close`, `grip` |
+| `/lift_mode` | `std_msgs/String` | user → `arm_controller` | lift: `down`, `carry`, `up` or a height in metres |
+| `/arm_state`, `/lift_state` | `std_msgs/String` (latched) | `arm_controller` → | current jaw mode / lift setting |
+| `/lift/cmd_pos` | `std_msgs/Float64` | ROS → Gazebo | lift height target (m) |
 | `/left_arm/cmd_pos`, `/right_arm/cmd_pos` | `std_msgs/Float64` | ROS → Gazebo | arm joint targets (rad) |
 | `/odom` | `nav_msgs/Odometry` | Gazebo → ROS | wheel odometry |
 | `/tf` | `tf2_msgs/TFMessage` | Gazebo → ROS | `odom → base_footprint` |
@@ -139,14 +155,14 @@ arm_controller --/left_arm/cmd_pos, /right_arm/cmd_pos--> ros_gz_bridge <==> Gaz
 | `/camera/image_raw` | `sensor_msgs/Image` | Gazebo → ROS | camera |
 | `/clock` | `rosgraph_msgs/Clock` | Gazebo → ROS | simulation time |
 
-**Own node:** `arm_controller` maps mode names to joint angles. It checks names against a fixed list, clamps angles to the joint limits, and re-sends the target at 5 Hz so a target is never lost while the bridge starts. It also deploys the arms automatically after spawning.
+**Own node:** `arm_controller` is the gripper controller. It maps jaw-mode names and lift heights to joint targets. It checks names against fixed lists, clamps targets to the joint limits, and refuses to open the jaws while an object is lifted. It re-sends targets at 5 Hz so none is lost while the bridge starts, and deploys the jaws automatically after spawning.
 
 **Third-party nodes, and why:**
 - `robot_state_publisher` publishes the robot's link transforms from the URDF and `/joint_states`, which RViz and later navigation need.
 - `ros_gz_sim create` is the standard way to spawn a URDF into Gazebo Harmonic.
 - `ros_gz_bridge parameter_bridge` converts the Gazebo transport topics above to and from ROS 2 messages.
 - `teleop_twist_keyboard` gives simple keyboard driving on `/cmd_vel`.
-- The Gazebo plugins `DiffDrive`, `JointPositionController` and `JointStatePublisher` turn velocity commands into wheel motion and drive the arms.
+- The Gazebo plugins `DiffDrive`, `JointPositionController` (jaws in velocity mode, lift in PID force mode) and `JointStatePublisher` turn velocity commands into wheel motion and drive the gripper.
 
 *(The rqt_graph will be added here.)*
 
@@ -165,15 +181,20 @@ docker run --rm --network none --shm-size=2g -v <path-to>/pde4430_ws:/ws --entry
 
 Each trial (`scripts/bay_trials.py`) places the object 0.9 m ahead of the robot and catches it with the arms. It drives an S-bend (about 29° right, then 29° left) and checks the object is still in the jaws. It then delivers the object and judges the result with `assessment_bay`'s own `object_in_bay()` rule.
 
-Latest full run (all checks pass, **3/3 objects delivered**):
+Latest full run with the gripper (all checks pass, **3/3 objects delivered**):
 
-| Object | Arm mode | Held while carried | Final position | Result |
-|---|---|---|---|---|
-| Large sphere | `large` (35° V), pushed straight, released 0.7 m short | 0.00 m off centre | (0.00, 2.50) | in the bay |
-| Small sphere | `close` (cage), S-bend | 0.01 m drift | (−0.34, 2.70) | in the bay |
-| Cylinder | `close` (cage), S-bend | 0.01 m drift, stayed upright | (0.13, 1.93) | in the bay |
+| Object | Method | Lift / object raised | Held while carried | Final position | Result |
+|---|---|---|---|---|---|
+| Large sphere | pushed in the 35° V, released 0.7 m short | (too big to grip) | centred | (−0.02, 2.50) | in the bay |
+| Small sphere | **gripped and lifted**, S-bend, set down | 7.9 cm / **7.7 cm** | held up through the S-bend | (0.30, 2.70) | in the bay |
+| Cylinder | **gripped and lifted**, S-bend, set down | 7.9 cm / **7.9 cm** | held up and upright | (0.13, 1.95) | in the bay, upright |
 
-The small sphere and the cylinder were delivered in every run once the "stop before touching, then cage" approach was used. The large sphere's history is in section 2.
+*Gripper tuning found by the trials:*
+1. **Squeeze force:** a jaw target only 1° past the contact angle gave almost no squeeze, and the small sphere slipped. The `grip` target is now well past contact (40°), so the jaw motors always push at their effort limit.
+2. **Effort limit:** at 12 N·m the cylinder was wedged so hard between the pads and the bumper that the physics solver locked the robot in place. 5 N·m (about 5× what the 0.5 kg cylinder needs) grips without jamming.
+3. **Pad angle:** flat pads on the angled jaws pressed a sphere slightly ahead of its centre, so it rolled backwards out of the grip (it rose only 2–5 cm of the 8 cm lift). Turning the pads 27° makes them parallel when gripping: 0.2 cm slip.
+4. **Lift control:** a velocity-mode controller could not move the lift under the jaws' weight. A PID force controller, capped at about 3× the lifted weight, rises smoothly and holds height.
+5. **Deploy timing:** the jaws now deploy only after the robot's joints appear on `/joint_states`, and targets are re-sent on a steady clock. A command sent before the robot had spawned was lost.
 
 Robot camera views during the trials (from `bay_trials.py`, `SNAPSHOTS=<dir>`):
 
@@ -198,7 +219,8 @@ Then open `http://localhost:6080/vnc.html?autoconnect=true&resize=remote`. The c
 |---|---|
 | `sim` | assessment_bay world + robot on the start pad |
 | `teleop` | keyboard driving |
-| `arms <mode>` | `fold`, `wide`, `large`, `straight`, `close` |
+| `arms <mode>` | `fold`, `wide`, `large`, `straight`, `close`, `grip` |
+| `lift <height>` | `down`, `carry`, `up` or metres |
 | `reset_objects` | put the three objects back |
 | `baycheck` | ground-truth bay checker (testing only) |
 | `model` | RViz model viewer |
