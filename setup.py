@@ -25,6 +25,8 @@ setup(
         'console_scripts': [
             'arm_controller = pde4430_bay_robot.arm_controller:main',
             'teleop_gui = pde4430_bay_robot.teleop_gui:main',
+            'bay_detector = pde4430_bay_robot.bay_detector:main',
+            'strip_detector = pde4430_bay_robot.strip_detector:main',
         ],
     },
 )

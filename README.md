@@ -4,7 +4,7 @@ Coursework for **PDE4430 Mobile Robotics** (Middlesex University Dubai, 2026–2
 
 A differential-drive robot with a low front bumper and a **fold-out gripper on a lift**: two motorised jaws with rubber grip pads, which push, cage or **pick up** objects. It delivers the large sphere, the small sphere and the upright cylinder of the [`assessment_bay`](https://github.com/sameerkishore/ros2_assessment_world) world through the bay opening, using **physical contact only**. No joints, plugins or services attach objects or set their pose.
 
-> Status: robot design, gripper and lift, Gazebo integration, gripper control, scripted delivery trials and the teleoperation GUI done. Autonomy is in progress.
+> Status: robot design, gripper and lift, Gazebo integration, gripper control, scripted delivery trials and the teleoperation GUI done. Autonomy is in progress on the `autonomy` branch: bay perception (LiDAR + camera) done, mission control not started (section 8).
 
 ---
 
@@ -82,6 +82,10 @@ pde4430_bay_robot/
 ├── launch/display.launch.py         view the model in RViz (sliders for the arms)
 ├── pde4430_bay_robot/arm_controller.py   gripper: jaw modes + lift heights -> joint targets
 ├── pde4430_bay_robot/teleop_gui.py       teleoperation window: drive, speed limit, jaws, lift
+├── pde4430_bay_robot/bay_detector.py     LiDAR: finds the bay by fitting its three walls
+├── pde4430_bay_robot/strip_detector.py   camera: finds the yellow strip at the opening
+├── pde4430_bay_robot/odom_history.py     helpers: sensor mounting + robot pose at a sensor time
+├── launch/perception.launch.py           starts both detectors
 ├── scripts/check_urdf.py            offline URDF checks (tree, inertia, footprint)
 ├── scripts/bay_trials.py            scripted delivery trials (testing only)
 ├── scripts/docker_sim_test.sh       full end-to-end test in Docker
@@ -167,10 +171,17 @@ robot_state_publisher -> /tf (robot links), RViz
 | `/scan` | `sensor_msgs/LaserScan` | Gazebo → ROS | LiDAR |
 | `/camera/image_raw` | `sensor_msgs/Image` | Gazebo → ROS | camera |
 | `/clock` | `rosgraph_msgs/Clock` | Gazebo → ROS | simulation time |
+| `/bay/opening` | `geometry_msgs/PoseStamped` | `bay_detector` → | centre of the bay opening, x axis into the bay (odom) |
+| `/bay/markers` | `visualization_msgs/MarkerArray` | `bay_detector` → RViz | fitted bay walls |
+| `/bay_strip/pose` | `geometry_msgs/PoseStamped` | `strip_detector` → | centre of the visible strip, x axis into the bay (base_footprint) |
+| `/bay_strip/length` | `std_msgs/Float32` | `strip_detector` → | visible strip length (~1.0 m = whole strip in view) |
+| `/bay_strip/debug` | `sensor_msgs/Image` | `strip_detector` → | camera image with the detection drawn on it |
 
 **Own nodes:**
 
 `teleop_gui` is the operator window (tkinter). It publishes `/cmd_vel` at 10 Hz while a drive button or key is held, scaled by the speed sliders, then sends a few zero commands and goes quiet, so it does not fight other nodes driving the robot. Jaw and lift buttons send requests on `/arm_mode` and `/lift_mode`; the window shows the state `arm_controller` reports back.
+
+`bay_detector` and `strip_detector` find the bay with the robot's own sensors (section 8).
 
 `arm_controller` is the gripper controller. It maps jaw-mode names and lift heights to joint targets. It checks names against fixed lists, clamps targets to the joint limits, and refuses to open the jaws while an object is lifted. It re-sends targets at 5 Hz so none is lost while the bridge starts, and deploys the jaws automatically after spawning.
 
@@ -222,7 +233,60 @@ Robot camera views during the trials (from `bay_trials.py`, `SNAPSHOTS=<dir>`):
 
 > The trials use Gazebo ground truth **only to set up and judge** each test, as the brief allows. The robot's own nodes never use object positions.
 
-## 8. Running without Ubuntu (browser desktop in Docker)
+## 8. Autonomy (in progress, `autonomy` branch)
+
+The plan: find the bay with the sensors, then find each object, pick it up or push it, and deliver it, using the manual strategy from section 2. The first part, **finding the bay**, is done. The robot uses two independent sensors, as the brief requires (no ground-truth positions).
+
+```bash
+ros2 launch pde4430_bay_robot sim.launch.py render_engine:=ogre2
+ros2 launch pde4430_bay_robot perception.launch.py
+ros2 topic echo /bay/opening          # bay opening in odom
+ros2 run rqt_image_view rqt_image_view /bay_strip/debug
+```
+
+> **Use `render_engine:=ogre2` for anything that needs the LiDAR.** With the default `ogre` engine, Gazebo's `gpu_lidar` returns its minimum range (0.12 m) on every ray, so the scan is empty. (It is not the LiDAR housing: removing it changes nothing.) The camera works with both.
+
+### LiDAR: bay detector (`bay_detector`)
+
+The bay walls are 0.5 m high, so the 0.35 m scan plane sees them. A simple "find a gap" approach fails: from the start pad the LiDAR mostly sees the back wall through the opening, and from the side it sees a single flat wall. So the detector fits a **model of the bay** (three wall rectangles with the sizes from the brief, not its position) to the scan:
+
+1. Split the scan into straight segments.
+2. Pair each segment with each of the bay's six long wall faces. Each pairing gives a candidate bay pose.
+3. Score each candidate: scan points on the model's walls count for it. Evidence against it is **rays that pass through a model wall**, and points that **carry on in line past the end of a wall**. That rejects fits to the arena walls, for example the model fitted flush behind an arena corner.
+4. Refine the best few candidates by least squares, and accept one only if it is **pinned down**: points on at least two different wall faces, and no slightly shifted or turned fit explaining the scan as well. One flat wall seen side-on fits several bay poses, so the detector reports nothing rather than guess.
+
+The result is converted to the odom frame with the robot's pose **at the scan time**, so the bay's position can be remembered while driving.
+
+### Camera: strip detector (`strip_detector`)
+
+The yellow strip is visual only. The camera finds it by colour, then projects each strip pixel onto the floor using the camera model and its mounting (from TF).
+
+- **The jaws are yellow too** and fill the bottom of every frame. The strip is pure yellow (no blue, saturation ~255), and the jaw paint has some blue (saturation ≤ ~210), so a saturation threshold of 235 separates them.
+- **Resting tilt:** the robot sits about 0.5° nose-down on its casters. That moves a floor point 4 m away by ~25 cm, so the projection corrects for it (`pitch_correction_deg`, calibrated against the known strip position).
+
+### Results
+
+Offline, on 40 random robot poses around the arena (objects in place), scored against the known layout:
+
+| | Correct | Wrong | Not found | Accuracy when found |
+|---|---|---|---|---|
+| LiDAR bay detector | 10 | **0** | 30 | 0.8 cm, 0.2° mean (max 1.4 cm, 0.7°), up to 4.3 m away |
+| Camera strip detector | 8 (every frame with the strip in view) | **0** | 32 (strip not in view) | ≤ 4 cm, ≤ 0.6°, 1–4 m away |
+
+Most LiDAR misses are views of one bay wall side-on (refused on purpose) or far views with few points. The LiDAR fit takes ~0.5 s, so the bay updates at about 2 Hz.
+
+Live, driving from the start pad (forward 1.3 m, turning ±25°, then reversing), both detectors place the opening at (4.2, 0) in odom within **1 cm** while the odometry is still good. After turning on the spot both drift by the same 8–10 cm, which is wheel odometry error (about 1° of heading), not detector error. The autonomy will re-detect the bay on the way in.
+
+*Problems found and fixed on the way:*
+1. **TF too slow in Python nodes.** Gazebo's `JointStatePublisher` published joint states every physics step (870 Hz). `robot_state_publisher` turned that into hundreds of `/tf` messages per second, and the Python TF listener lagged ~2 s behind the sensors. Detections were converted with an old robot pose: they looked shifted but not rotated. Fixes: joint states at 50 Hz (`<update_rate>` in the URDF), and the detectors read their fixed sensor mounting from TF once and the robot pose from `/odom` (`odom_history.py`).
+2. **LiDAR blind with `ogre`** (above).
+
+### Next
+
+- Object detection: the cylinder and large sphere in the LiDAR (round clusters of the right radius), the small sphere and colours in the camera.
+- Mission node: a state machine for find object → approach → grip/push → go to the bay (lined up with the opening) → release, re-detecting the bay on the way in.
+
+## 9. Running without Ubuntu (browser desktop in Docker)
 
 `docker/` builds a ROS 2 Jazzy + Gazebo Harmonic desktop that runs in Docker and opens in a web browser through noVNC. It works on Windows or macOS with Docker Desktop.
 

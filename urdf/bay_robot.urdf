@@ -562,6 +562,10 @@
     <plugin filename="gz-sim-joint-state-publisher-system"
             name="gz::sim::systems::JointStatePublisher">
       <topic>joint_states</topic>
+      <!-- 50 Hz: by default it publishes every physics step (~1 kHz), which
+           robot_state_publisher turns into ~1 kHz of /tf - more than Python nodes
+           using TF (e.g. bay_detector) can keep up with -->
+      <update_rate>50</update_rate>
     </plugin>
   </gazebo>
 
