@@ -4,7 +4,7 @@
   <name>pde4430_bay_robot</name>
   <version>0.1.0</version>
   <description>PDE4430 coursework: differential-drive robot with a V-cradle that pushes objects into the loading bay.</description>
-  <maintainer email="student@example.com">PDE4430 Student</maintainer>
+  <maintainer email="Sanjit0907@users.noreply.github.com">Sanjit</maintainer>
   <license>MIT</license>
 
   <exec_depend>robot_state_publisher</exec_depend>

@@ -17,8 +17,8 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='PDE4430 Student',
-    maintainer_email='student@example.com',
+    maintainer='Sanjit',
+    maintainer_email='Sanjit0907@users.noreply.github.com',
     description='PDE4430 bay-pushing robot',
     license='MIT',
     entry_points={
