@@ -25,7 +25,8 @@ Publishes
     /arm_state          std_msgs/String   current jaw mode (latched)
     /lift_state         std_msgs/String   current lift setting (latched)
     /scoop_state        std_msgs/String   current scoop setting (latched)
-    /finger_state       std_msgs/String   current finger setting (latched)
+    /finger_state       std_msgs/String   current finger setting (latched): fold, open,
+                                          hooking (routine running), hook
 
 Jaw angle convention (see urdf/bay_robot.urdf): 0 rad = folded back along the body,
 pi rad = pointing straight ahead; the jaw direction is (180 deg - angle) outward.
@@ -39,6 +40,11 @@ Safety rules
       sphere the fingers are holding), and with the fingers open the jaws can only
       move between wide, large and straight (closer, the long fingers would cross).
     * Fingers can only open or hook with the jaws in wide, large or straight.
+    * The fingers move to a new setting at 40 deg/s (ramped), not at full speed.
+    * Hooking runs a routine: sweep the large sphere onto the tray (jaws relaxed to
+      40 deg), centre it (jaws squeeze / fingers press, three times), hold. The
+      finger state reads 'hooking' until it is done, then 'hook'. Letting go relaxes
+      the jaws first, then opens or folds the fingers.
     * The scoop tray only moves while the lift is down.
     * 'fold' folds everything (fingers, tray, jaws) and lowers the lift first.
     * All targets are clamped to the joint limits.
@@ -51,6 +57,7 @@ Parameters
     lift_heights.<name> (float, m)     override any named lift height
 """
 import math
+from collections import deque
 
 import rclpy
 from rclpy.clock import Clock, ClockType
@@ -80,11 +87,31 @@ DEFAULT_LIFTS = {'down': 0.0, 'carry': 0.08, 'up': 0.15}
 # Scoop tray: folded up / flat. 'down' asks for a little past flat, so the tray rests on
 # its joint stop and the weight on it is carried by the stop.
 SCOOP = {'up': -0.05, 'down': math.pi / 2 + 0.05}
-# Fingers (angle to their jaw): folded along it / hooked at 90 deg / open, straight on.
-# 'hook' asks for less than 90 deg, past where the fingers meet the large sphere, so
-# they keep pressing it with the full 3 N m. 'fold' asks a little past 0 so they rest
-# on the joint stop.
-FINGERS = {'fold': -0.05, 'hook': math.radians(70.0), 'open': math.pi}
+# Fingers (angle to their jaw): folded along it / hooked at ~90 deg / open, straight on.
+# 'fold' asks a little past 0 so they rest on the joint stop.
+HOOK_SWEEP = math.radians(80.0)        # sweep target: a little past where they meet the
+                                       # large sphere, so they push it up onto the tray
+HOOK_LIGHT = math.radians(92.0)        # just touching: lets the jaws move the sphere
+HOOK_HOLD = math.radians(84.0)         # final hold: pressing it into the jaws' V
+FINGERS = {'fold': -0.05, 'hook': HOOK_HOLD, 'open': math.pi}
+# After the sweep the sphere sits wherever the sweep left it (4-7 cm off centre in the
+# trials). Centring routine: a few cycles of "jaws squeeze to 35 deg with the fingers
+# just touching" (the jaws' V pushes it towards the middle) and "jaws relax, fingers
+# press" (pushes it back onto the tray). Each cycle moves it closer to the middle:
+# measured -7 cm -> -1 cm. Then hold with the jaws at 35 deg and the fingers pressing.
+CENTRE_CYCLES = 3
+CENTRE_TIME = 2.0                      # s per half-cycle (computer time)
+RELAX_TIME = 1.0                       # s, jaws relax before the fingers let go
+# The finger target moves towards a new setting at this rate instead of jumping, so
+# both fingers sweep round the sphere slowly and together. Swinging at full speed one
+# reached it first and shoved it 5-13 cm sideways.
+FINGER_RATE = math.radians(40.0)       # rad/s: open -> hook takes ~2.5 s
+# With the jaws in 'large', they relax from 35 to 40 deg outward (~1.8 cm clear of the
+# large sphere) while the fingers are open or sweeping, and BEFORE the fingers let go
+# of it. Squeezing during the sweep wedged the sphere off centre, and squeezing at
+# release made the jaws spring back and shoot it 1 m out of the jaws.
+LARGE_HOLD = math.radians(140.0)       # 40 deg outward
+FINGER_TICK = 0.05                     # s, ramp update period
 
 JAW_LIMIT = (0.0, 3.9)                 # must match <limit> in the URDF
 LIFT_LIMIT = (0.0, 0.15)
@@ -130,7 +157,12 @@ class ArmController(Node):
         self.mode, self.target = 'fold', self.modes['fold']
         self.lift_name, self.lift_target = 'down', 0.0
         self.scoop = 'up'
-        self.fingers = 'fold'
+        self.fingers = 'fold'                  # requested finger setting
+        self.finger_cmd = FINGERS['fold']      # ramped finger target actually sent
+        self.finger_goal = FINGERS['fold']     # where the ramp is heading now
+        self.jaw_override = None               # relaxed jaw angle in 'large', or None
+        self.steps = deque()                   # finger routine still to run
+        self.step_left = 0.0                   # s left in the current routine step
         self.deploy_timer = None
         self.deployed = False
         self.create_subscription(JointState, '/joint_states', self.on_joints, 10)
@@ -139,6 +171,8 @@ class ArmController(Node):
         # message at start-up could be lost. This timer runs on the computer's steady
         # clock: a simulation-time timer created before /clock exists never fires.
         self.create_timer(0.2, self.send_targets, clock=Clock(clock_type=ClockType.STEADY_TIME))
+        self.create_timer(FINGER_TICK, self.ramp_fingers,
+                          clock=Clock(clock_type=ClockType.STEADY_TIME))
         self.publish_state()
         self.get_logger().info(
             f'Gripper ready. Jaw modes: {", ".join(self.modes)}; '
@@ -275,28 +309,79 @@ class ArmController(Node):
                 f'Refusing to {name} the fingers with the jaws in "{self.mode}" - they '
                 f'would cross. Open the jaws first ({", ".join(HOOK_OK_MODES)})')
             return
+        if name == self.fingers:
+            return
+        # The routine: (finger target, jaw override, seconds to hold once reached)
+        steps = []
+        if self.fingers == 'hook':                    # letting go: relax the jaws first
+            steps.append((self.finger_goal, LARGE_HOLD, RELAX_TIME))
+        if name == 'hook':
+            steps.append((HOOK_SWEEP, LARGE_HOLD, 1.0))         # sweep it onto the tray
+            for _ in range(CENTRE_CYCLES):                      # centre it
+                steps.append((HOOK_LIGHT, None, CENTRE_TIME))
+                steps.append((HOOK_SWEEP, LARGE_HOLD, CENTRE_TIME))
+            steps.append((HOOK_HOLD, None, 0.0))                # hold
+        else:
+            steps.append((FINGERS[name], LARGE_HOLD if name == 'open' else None, 0.0))
         self.fingers = name
-        self.get_logger().info(f'Fingers -> {name}')
+        self.steps = deque(steps)
+        self.next_step()
+        self.get_logger().info(f'Fingers -> {name}'
+                               + (' (sweep, centre, hold)' if name == 'hook' else ''))
         self.publish_state()
         self.send_targets()
+
+    def next_step(self):
+        self.finger_goal, self.jaw_override, self.step_left = self.steps.popleft()
+
+    def ramp_fingers(self):
+        """20 Hz: move the sent finger target towards the current step's target; once
+        there, hold for the step's time, then start the next step."""
+        if self.finger_cmd != self.finger_goal:
+            step = FINGER_RATE * FINGER_TICK
+            self.finger_cmd += max(-step, min(step, self.finger_goal - self.finger_cmd))
+        elif self.step_left > 0:
+            self.step_left -= FINGER_TICK
+        elif self.steps:
+            self.next_step()
+        else:
+            if self.finger_state() != self.published_fingers:
+                self.publish_state()            # routine finished ('hooking' -> 'hook')
+            return
+        self.send_targets()
+
+    def finger_state(self):
+        busy = self.steps or self.finger_cmd != self.finger_goal or self.step_left > 0
+        return 'hooking' if self.fingers == 'hook' and busy else self.fingers
+
+    def jaw_target(self):
+        """The jaw angle to send: the mode's angle, or relaxed (LARGE_HOLD) while the
+        finger routine asks for it in 'large'."""
+        if self.mode == 'large' and self.jaw_override is not None:
+            return self.jaw_override
+        return self.target
+
+    @staticmethod
+    def clamp_finger(angle):
+        return min(max(angle, FINGER_LIMIT[0]), FINGER_LIMIT[1])
 
     # ------------------------------------------------------------------ output
     def send_targets(self):
         """Publish every target (the URDF mirrors the jaws and the fingers)."""
-        jaw = Float64(data=float(self.target))
+        jaw = Float64(data=float(self.jaw_target()))
         self.left_pub.publish(jaw)
         self.right_pub.publish(jaw)
         self.lift_pub.publish(Float64(data=float(self.lift_target)))
         scoop = min(max(SCOOP[self.scoop], SCOOP_LIMIT[0]), SCOOP_LIMIT[1])
         self.scoop_pub.publish(Float64(data=float(scoop)))
-        finger = min(max(FINGERS[self.fingers], FINGER_LIMIT[0]), FINGER_LIMIT[1])
-        self.finger_pub.publish(Float64(data=float(finger)))
+        self.finger_pub.publish(Float64(data=float(self.clamp_finger(self.finger_cmd))))
 
     def publish_state(self):
         self.state_pub.publish(String(data=self.mode))
         self.lift_state_pub.publish(String(data=self.lift_name))
         self.scoop_state_pub.publish(String(data=self.scoop))
-        self.finger_state_pub.publish(String(data=self.fingers))
+        self.published_fingers = self.finger_state()
+        self.finger_state_pub.publish(String(data=self.published_fingers))
 
 
 def main(args=None):

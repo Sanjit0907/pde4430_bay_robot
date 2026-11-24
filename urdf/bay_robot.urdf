@@ -493,6 +493,49 @@
     <dynamics damping="0.5" friction="0.0"/>
   </joint>
 
+  <!-- ===================== Backstop V ===================== -->
+  <!-- Two short plates on the lift carriage, just above the bumper, forming a shallow V
+       (each face 15 deg off square across the robot), 0.25 - 0.33 m above the floor:
+       the large sphere's equator height when it sits on the scoop tray. The hooked
+       fingers press the sphere back into it, and the V slides it to the middle, so it
+       is always held centred (the fingers alone left it 4 - 7 cm to one side, wherever
+       their sweep happened to put it). It rides on the lift, so it stays at the
+       equator when the sphere is raised. Its top (0.33 m with the lift down) is just
+       below the LiDAR scan plane (0.35 m). Apex 0.10 m ahead of the robot centre:
+       the sphere then sits with its centre 0.41 m ahead. Slippery (mu 0.1).
+       The small sphere (top 0.20 m) never reaches it; the cylinder is held against
+       the folded scoop tray in front of it. -->
+  <link name="backstop">
+    <visual>
+      <origin xyz="0.0446 0.0737 0.13" rpy="0 0 1.309"/>
+      <geometry><box size="0.15 0.01 0.08"/></geometry>
+      <material name="carriage_dark"/>
+    </visual>
+    <collision>
+      <origin xyz="0.0446 0.0737 0.13" rpy="0 0 1.309"/>
+      <geometry><box size="0.15 0.01 0.08"/></geometry>
+    </collision>
+    <visual>
+      <origin xyz="0.0446 -0.0737 0.13" rpy="0 0 -1.309"/>
+      <geometry><box size="0.15 0.01 0.08"/></geometry>
+      <material name="carriage_dark"/>
+    </visual>
+    <collision>
+      <origin xyz="0.0446 -0.0737 0.13" rpy="0 0 -1.309"/>
+      <geometry><box size="0.15 0.01 0.08"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0.045 0 0.13" rpy="0 0 0"/>
+      <mass value="0.1"/>
+      <inertia ixx="0.00030" ixy="0" ixz="0" iyy="0.00006" iyz="0" izz="0.00030"/>
+    </inertial>
+  </link>
+  <joint name="backstop_joint" type="fixed">
+    <parent link="lift_carriage"/>
+    <child link="backstop"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
   <!-- ===================== Hook fingers ===================== -->
   <!-- A 0.35 m finger hinged at each jaw tip, 0.25 - 0.40 m above the floor, with
        three positions (angle relative to its jaw; Gazebo spawns joints at 0, so 0
@@ -665,6 +708,8 @@
   <!-- scoop tray: low friction, so objects slide/roll onto it easily; its rubber pad
        (used when folded) is part of the same link, so it gets the tray's friction -->
   <gazebo reference="scoop"><mu1>0.4</mu1><mu2>0.4</mu2></gazebo>
+  <gazebo reference="backstop"><mu1>0.1</mu1><mu2>0.1</mu2></gazebo>
+  <gazebo reference="backstop_joint"><preserveFixedJoint>true</preserveFixedJoint></gazebo>
   <!-- fingers: slippery, so the sphere they push can roll along them up onto the
        tray. They hold it by where they are (in front of it), not by friction. -->
   <gazebo reference="left_finger"><mu1>0.2</mu1><mu2>0.2</mu2></gazebo>
@@ -735,16 +780,20 @@
 
     <!-- Hook fingers: both follow /fingers/cmd_pos (the joints are mirrored, so the
          same angle moves both alike). 0 = folded, pi/2 = hooked, pi = open. Force
-         (PID) mode, capped at the 3 N m joint effort: hooked, arm_controller asks for
-         less than 90 deg (past where they meet the sphere), so the fingers keep
-         pressing it with a steady force. -->
+         (PID) mode, capped at the 3 N m joint effort. Hooked, arm_controller asks for
+         80 deg, a little past where they meet the sphere, so they keep pressing it.
+         P 30 keeps the push proportional to how far each finger is held back: if the
+         sphere sits to one side, that finger is pushed back further and presses
+         harder, which moves it back to the middle. (With a far target both fingers
+         pushed at the 3 N m cap whatever their angle, and the sphere stayed wherever
+         the sweep left it, 5 cm off centre.) -->
     <plugin filename="gz-sim-joint-position-controller-system"
             name="gz::sim::systems::JointPositionController">
       <joint_name>left_finger_joint</joint_name>
       <topic>fingers/cmd_pos</topic>
-      <p_gain>15</p_gain>
+      <p_gain>30</p_gain>
       <i_gain>0</i_gain>
-      <d_gain>1</d_gain>
+      <d_gain>2</d_gain>
       <cmd_max>3</cmd_max>
       <cmd_min>-3</cmd_min>
     </plugin>
@@ -752,9 +801,9 @@
             name="gz::sim::systems::JointPositionController">
       <joint_name>right_finger_joint</joint_name>
       <topic>fingers/cmd_pos</topic>
-      <p_gain>15</p_gain>
+      <p_gain>30</p_gain>
       <i_gain>0</i_gain>
-      <d_gain>1</d_gain>
+      <d_gain>2</d_gain>
       <cmd_max>3</cmd_max>
       <cmd_min>-3</cmd_min>
     </plugin>

@@ -31,6 +31,7 @@ From the `assessment_bay` package:
 | Bumper | Plate 0.34 m wide, **0.02–0.24 m** above the floor | Pushes the cylinder with its contact centroid at ~0.13 m, below its 0.20 m CoM, so it slides instead of tipping. Meets the large sphere just under its equator |
 | **Gripper jaws** | Two 0.44 m plates, 0.02–0.30 m high, pivoting about vertical axes at the bumper corners, with a 0.40 m post at each tip. Gazebo joint position controllers in force mode (P 60, capped at 5 N·m, about 25 N squeeze at the pads) | Folded back along the sides at spawn. Swing out after spawn to guide, cage or grip each object (modes below) |
 | **Scoop tray (ramp)** | 0.36 × 0.30 m tray with a 0.10 m bevelled tip, hinged at the foot of the bumper, on the lift. Folded up at spawn, flat when deployed: top 16 mm above the floor, tip 4 mm, tip underside 1.5 mm, a 7° slope. Reaches 0.59 m ahead | The large sphere sits on it, so the lift can raise it. Low and gentle, so a sphere pushed against the tip rolls up onto it easily. Folded, a rubber pad on its underside takes over from the bumper pad it covers |
+| **Backstop V** | Two short plates on the lift carriage just above the bumper, 0.25–0.33 m high, forming a shallow V (15° each side), μ 0.1 | The fingers press the large sphere back into it, and it seats in the middle: held centred (±0.5 cm), 0.41 m ahead. Top just below the LiDAR plane with the lift down |
 | **Hook fingers** | A 0.35 m finger hinged at each jaw tip, 0.25–0.40 m high (the large sphere's equator). Three positions: `fold` (along the jaw), `open` (straight on, reach 0.79 m), `hook` (90° to the jaw, inwards). Force mode, 3 N·m, slippery (μ 0.2) | The large sphere is wider than the jaw pivots, so the jaws alone can only touch it behind its middle. Swinging from `open` to `hook`, the fingers sweep round its front and push it up onto the tray and back against the bumper. Hooked, they lock it there (section below) |
 | **Grip pads** | Black rubber pads (μ 1.5), 0.12 × 0.15 m, 0.05–0.20 m above the floor, mounted **turned 27°** on the jaws, plus a rubber pad on the bumper face | When the jaws close on a 0.2 m object (they stop at about 27° inward), the two pad faces are **parallel** and press straight across its middle, like a parallel-jaw gripper, so a sphere cannot roll out. Separate links on preserved fixed joints, so they grip while the rest of each jaw stays slippery for guiding |
 | **Lift** | Carriage on two steel rails, prismatic joint 0–0.15 m, PID force control (capped at 70 N, ~2.5× the heaviest load) | Raises the jaws, fingers and tray together, so whatever they hold is **picked up** and carried clear of the floor, then set down in the bay |
@@ -58,11 +59,17 @@ Lift heights (`/lift_mode`): `down` 0 m, `carry` 0.08 m, `up` 0.15 m, or any hei
 
 Scoop tray (`/scoop_mode`): `up` (folded, spawn) or `down` (flat). It is deployed automatically after spawn, together with the jaws.
 
-Fingers (`/finger_mode`), angle to their jaw: `fold` 0° (along the jaw, spawn), `hook` 90° (target 70°, past where they meet the sphere, so they keep pressing with the full 3 N·m), `open` 180° (straight on). Gazebo spawns joints at 0, so 0 has to be the folded position.
+Fingers (`/finger_mode`), angle to their jaw: `fold` 0° (along the jaw, spawn), `hook` ~90°, `open` 180° (straight on). Gazebo spawns joints at 0, so 0 has to be the folded position. The fingers always move at 40°/s (ramped), so they sweep together. `hook` runs a routine, and `/finger_state` reads `hooking` until it is done:
+1. **Sweep** to 80° with the jaws relaxed to 40°: the sphere is pushed up onto the tray.
+2. **Centre**, three times: jaws squeeze to 35° with the fingers just touching (92°), then jaws relax and the fingers press (80°). Each squeeze moves the sphere towards the middle and into the backstop V.
+3. **Hold**: jaws at 35°, fingers pressing (84°).
+
+Letting go (`open` or `fold`) relaxes the jaws to 40° first, then moves the fingers.
 
 **Safety rules in `arm_controller`:**
 - The jaws can only open (any mode except `grip`/`close`) while the lift is down, so a lifted object is never dropped by accident.
 - Hooked fingers can only open or fold while the lift is down (they hold the lifted sphere).
+- With the jaws in `large`, they relax to 40° whenever the fingers are open or sweeping, and before the fingers let go (squeezing then wedged the sphere off centre, or shot it out of the jaws).
 - The jaws cannot move while the fingers are hooked, and with the fingers open they can only move between `wide`, `large` and `straight` (closer, the long fingers would cross). The fingers can only open or hook with the jaws in one of those modes.
 - The scoop tray only moves while the lift is down.
 - `fold` folds everything (fingers, tray, jaws) and lowers the lift first. All targets are clamped to the joint limits.
@@ -70,10 +77,10 @@ Fingers (`/finger_mode`), angle to their jaw: `fold` 0° (along the jaw, spawn),
 ### Delivery strategy
 
 - **Large sphere (scoop and hook):** tray `down`, jaws `large` (the 35° V), fingers `open`. Drive up slowly and **stop with the sphere just short of the tray tip** (centre ~0.66 m ahead of the robot centre). Then:
-  1. Fingers `hook`: they sweep round the front of the sphere and push it backwards. The only way it can go is up the tray tip, so it rolls onto the tray and against the bumper. Hooked, the fingers press its front sides, and it is locked between the bumper, the jaws and the fingers, on the tray.
+  1. Fingers `hook`: they sweep round the front of the sphere and push it backwards. The only way it can go is up the tray tip, so it rolls onto the tray. The centring routine then seats it in the backstop V, and it is locked between the backstop, the jaws and the fingers, on the tray, centred.
   2. Lift `carry`: it is picked up (+9 cm).
   3. Drive to the bay (turns are fine, it is held). Line up first: with the fingers hooked the robot is ~0.9 m wide, and the opening is 1.0 m.
-  4. Lift `down`, fingers `open`: it rolls forward off the tray. Reverse out.
+  4. Lift `down`, fingers `open` (the jaws relax first): it rolls straight forward off the tray. Reverse out.
 - **Small sphere / cylinder (pick and place):** tray `up` (folded: these are held by the jaw pads, and the tray tip would push them away), fingers `fold`, open `wide` and drive up slowly. **Stop before the bumper touches the object**: a sphere that is bumped rolls away at the robot's speed. Then:
   1. `close`: the jaws swing in around it and centre it.
   2. `grip`: the pads squeeze it.
@@ -90,6 +97,7 @@ Fingers (`/finger_mode`), angle to their jaw: `fold` 0° (along the jaw, spawn),
 5. **Picking up the large sphere: a passive ramp does not work.** The first scoop tray (12° tip, 2 mm above the floor) only nudged the sphere, which rolled away: at 0.12 m/s and even at 0.45 m/s it rose 6 mm on the tip and was kicked ahead. A free ball needs only a tiny push to roll, and that is all a moving ramp gives it. Something must hold the ball while it goes onto the ramp, hence the **fingers**: they push it backwards into the tip, so it can only go up.
 6. **The fingers stalled the sphere half-way** (0.55 m instead of 0.44 m): climbing a 12° tip onto a 22 mm tray took more push than the fingers could give before their reaction forced the soft jaws open (35° → 47°). Fixes: a lower tray (16 mm) with a 7° tip, slippery fingers (μ 0.2, so the sphere rolls along them; they hold it by position, not friction) and stiffer jaws (P 20 → 60).
 7. **The robot tipped onto its nose** (8.7°) whenever the lift rose with the fingers out: the centre of mass had moved ahead of the front caster, and the tray tip had been propping it up. atan(8 cm / 0.52 m) = 8.7°, exactly where the lifted tip meets the floor again. Fixes: 2 kg ballast at the back and the front caster moved under the bumper. Pitch while carrying the large sphere: +0.3°.
+8. **The large sphere was held 4–7 cm off centre** and landed exactly on the bay's limit (x = −0.20). The fingers reached it one after the other and shoved it sideways, and the 35° jaws, forced open to 38°, wedged it there. When the fingers let go, the jaws sprang back and shot it up to 1 m out, 0.4 m sideways. A slower finger sweep, a softer finger hold and the backstop V alone did not fix it: the off-centre sphere rested against one jaw and could not slide into the V. What worked: **jaws relaxed during the sweep, then a few squeeze cycles** (−7 cm → −0.5 cm), and **jaws relaxed before the fingers let go**, so it rolls straight out. Final position: (+0.01, 2.49), 19 cm from either wall.
 
 ## 3. Package layout
 
@@ -237,11 +245,9 @@ Latest full run, with the scoop tray and hook fingers (native Ubuntu, headless; 
 
 | Object | Held by | Lift / object raised | Held while carried | Final position | Result |
 |---|---|---|---|---|---|
-| Large sphere | **scoop tray + hooked fingers** | 7.7 cm / **9.0 cm** | held up through the S-bend, robot pitch +0.3° | (−0.20, 2.49) | in the bay |
-| Small sphere | jaw pads (`grip`) | 8.0 cm / **8.0 cm** | held up through the S-bend | (+0.01, 2.46) | in the bay |
-| Cylinder | jaw pads (`grip`) | 8.0 cm / **8.1 cm** | held up and upright | (+0.01, 2.21) | in the bay, upright |
-
-The large sphere is held about 5 cm off-centre (the two fingers do not sweep exactly together) and rolls a little sideways when released, so it ended at x = −0.20, exactly the limit for a 0.6 m sphere in the 1.0 m bay. It counts as delivered, but with no margin: releasing it further in, or centring it before the lift (e.g. jaws briefly to `large` again), would give some.
+| Large sphere | **scoop tray + hooked fingers**, centred | 7.6 cm / **9.0 cm** | held up and centred (±0.5 cm) through the S-bend, robot pitch +0.3° | (+0.01, 2.49) | in the bay |
+| Small sphere | jaw pads (`grip`) | 8.0 cm / **8.0 cm** | held up through the S-bend | (−0.00, 2.45) | in the bay |
+| Cylinder | jaw pads (`grip`) | 8.0 cm / **8.0 cm** | held up and upright | (+0.01, 2.21) | in the bay, upright |
 
 *Gripper tuning found by the trials:*
 1. **Squeeze force:** a jaw target only 1° past the contact angle gave almost no squeeze, and the small sphere slipped. The `grip` target is now well past contact (40°), so the jaw motors always push at their effort limit.

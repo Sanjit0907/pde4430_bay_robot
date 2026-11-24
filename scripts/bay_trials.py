@@ -55,7 +55,7 @@ FRONT = 0.10                     # bumper face, metres ahead of the robot centre
 #   held_at  where the object centre sits once held (for lining up with the bay)
 #   z        spawn height of the object centre
 OBJECTS = {
-    'large_sphere': dict(how='hook', pre='large', stop_at=0.66, held_at=0.44, z=0.30),
+    'large_sphere': dict(how='hook', pre='large', stop_at=0.66, held_at=0.41, z=0.30),
     'small_sphere': dict(how='grip', pre='wide', stop_at=0.24, held_at=0.23, z=0.10),
     'cylinder':     dict(how='grip', pre='wide', stop_at=0.24, held_at=0.23, z=0.20),
 }
@@ -141,6 +141,9 @@ class Trials(Node):
         self.lift = self.create_publisher(String, '/lift_mode', 10)
         self.scoop = self.create_publisher(String, '/scoop_mode', 10)
         self.fingers = self.create_publisher(String, '/finger_mode', 10)
+        self.finger_state = None
+        self.create_subscription(String, '/finger_state',
+                                 lambda m: setattr(self, 'finger_state', m.data), 10)
         # Simulation time from /clock: Gazebo may run slower than real time (e.g. no GPU),
         # so all durations below are measured in simulated seconds.
         self.sim_t = None
@@ -256,9 +259,18 @@ class Trials(Node):
         self.scoop.publish(String(data=mode))
         self.sleep(wait)
 
-    def set_fingers(self, mode, wait=2.5):
+    def set_fingers(self, mode, wait=5.5):
+        """Fingers move ramped (40 deg/s); 'hook' runs arm_controller's sweep-centre-hold
+        routine, so wait until /finger_state reports it done."""
         self.fingers.publish(String(data=mode))
-        self.sleep(wait)
+        if mode == 'hook':
+            self.sleep(1.0)
+            end = time.time() + 90
+            while self.finger_state != 'hook' and time.time() < end:
+                rclpy.spin_once(self, timeout_sec=0.1)
+            self.sleep(1.0)
+        else:
+            self.sleep(wait)
 
     def face(self, x, y, tol=math.radians(1.5)):
         """Turn on the spot to face the point (x, y) (ground-truth pose, test only)."""
