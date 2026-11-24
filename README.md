@@ -4,7 +4,7 @@ Coursework for **PDE4430 Mobile Robotics** (Middlesex University Dubai, 2026–2
 
 A differential-drive robot with a low front bumper and a **fold-out gripper on a lift**: two motorised jaws with rubber grip pads, which push, cage or **pick up** objects. It delivers the large sphere, the small sphere and the upright cylinder of the [`assessment_bay`](https://github.com/sameerkishore/ros2_assessment_world) world through the bay opening, using **physical contact only**. No joints, plugins or services attach objects or set their pose.
 
-> Status: robot design, gripper and lift, Gazebo integration, gripper control and scripted delivery trials done. Teleoperation GUI and autonomy are in progress.
+> Status: robot design, gripper and lift, Gazebo integration, gripper control, scripted delivery trials and the teleoperation GUI done. Autonomy is in progress.
 
 ---
 
@@ -81,6 +81,7 @@ pde4430_bay_robot/
 ├── launch/sim.launch.py             assessment_bay world + robot + bridge + arm controller
 ├── launch/display.launch.py         view the model in RViz (sliders for the arms)
 ├── pde4430_bay_robot/arm_controller.py   gripper: jaw modes + lift heights -> joint targets
+├── pde4430_bay_robot/teleop_gui.py       teleoperation window: drive, speed limit, jaws, lift
 ├── scripts/check_urdf.py            offline URDF checks (tree, inertia, footprint)
 ├── scripts/bay_trials.py            scripted delivery trials (testing only)
 ├── scripts/docker_sim_test.sh       full end-to-end test in Docker
@@ -111,12 +112,20 @@ ros2 launch pde4430_bay_robot sim.launch.py layout:=random seed:=42   # other ob
 ros2 launch pde4430_bay_robot sim.launch.py render_engine:=ogre2 rviz:=true
 ```
 
-**Drive** (second terminal):
+**Teleoperation GUI** (second terminal):
 ```bash
-ros2 run teleop_twist_keyboard teleop_twist_keyboard
+ros2 run pde4430_bay_robot teleop_gui
 ```
 
-**Arms** (third terminal):
+![Teleop GUI](docs/teleop_gui.png)
+
+- **Drive:** hold a direction button, or hold W/A/S/D or the arrow keys (two keys together for a curve). Releasing stops the robot; Space or **Stop** stops it at once. The robot also stops if the window loses focus.
+- **Speed limit:** sliders for drive speed (up to 0.5 m/s) and turn rate (up to 1.5 rad/s), the robot's own limits.
+- **Jaws / Lift:** one button per mode, plus a height slider for the lift. The highlighted button is the state `arm_controller` reports, so a refused request (e.g. opening the jaws while lifted) shows up straight away.
+
+The keyboard teleop also still works: `ros2 run teleop_twist_keyboard teleop_twist_keyboard`.
+
+**Arms from the command line** (third terminal):
 ```bash
 ros2 topic pub --once /arm_mode std_msgs/msg/String "{data: grip}"    # fold|wide|large|straight|close|grip
 ros2 topic pub --once /lift_mode std_msgs/msg/String "{data: carry}"  # down|carry|up or metres
@@ -131,21 +140,25 @@ ros2 launch assessment_bay bay_checker.launch.py
 ## 6. Architecture (nodes, topics, messages)
 
 ```
-teleop_twist_keyboard --/cmd_vel--------------------+
-                                                     v
-arm_controller --/left_arm/cmd_pos, /right_arm/cmd_pos, /lift/cmd_pos--> ros_gz_bridge <==> Gazebo (assessment_bay + bay_robot)
-     ^                                               |
-  /arm_mode, /lift_mode     /odom /tf /joint_states /scan /camera/image_raw /clock
-                                                     v
-                                     robot_state_publisher -> /tf (robot links), RViz
+                 /arm_mode, /lift_mode
+teleop_gui  ------------------------------->  arm_controller
+    |       <-------------------------------       |
+    |           /arm_state, /lift_state            |  /left_arm/cmd_pos, /right_arm/cmd_pos,
+    | /cmd_vel                                     |  /lift/cmd_pos
+    v                                              v
+ros_gz_bridge  <=========================================>  Gazebo (assessment_bay + bay_robot)
+    |
+    |  /odom /tf /joint_states /scan /camera/image_raw /clock
+    v
+robot_state_publisher -> /tf (robot links), RViz
 ```
 
 | Topic | Type | Direction | Purpose |
 |---|---|---|---|
 | `/cmd_vel` | `geometry_msgs/Twist` | ROS → Gazebo | drive commands to the diff-drive plugin |
-| `/arm_mode` | `std_msgs/String` | user → `arm_controller` | jaw mode: `fold`, `wide`, `large`, `straight`, `close`, `grip` |
-| `/lift_mode` | `std_msgs/String` | user → `arm_controller` | lift: `down`, `carry`, `up` or a height in metres |
-| `/arm_state`, `/lift_state` | `std_msgs/String` (latched) | `arm_controller` → | current jaw mode / lift setting |
+| `/arm_mode` | `std_msgs/String` | `teleop_gui` / user → `arm_controller` | jaw mode: `fold`, `wide`, `large`, `straight`, `close`, `grip` |
+| `/lift_mode` | `std_msgs/String` | `teleop_gui` / user → `arm_controller` | lift: `down`, `carry`, `up` or a height in metres |
+| `/arm_state`, `/lift_state` | `std_msgs/String` (latched) | `arm_controller` → `teleop_gui` | current jaw mode / lift setting |
 | `/lift/cmd_pos` | `std_msgs/Float64` | ROS → Gazebo | lift height target (m) |
 | `/left_arm/cmd_pos`, `/right_arm/cmd_pos` | `std_msgs/Float64` | ROS → Gazebo | arm joint targets (rad) |
 | `/odom` | `nav_msgs/Odometry` | Gazebo → ROS | wheel odometry |
@@ -155,13 +168,17 @@ arm_controller --/left_arm/cmd_pos, /right_arm/cmd_pos, /lift/cmd_pos--> ros_gz_
 | `/camera/image_raw` | `sensor_msgs/Image` | Gazebo → ROS | camera |
 | `/clock` | `rosgraph_msgs/Clock` | Gazebo → ROS | simulation time |
 
-**Own node:** `arm_controller` is the gripper controller. It maps jaw-mode names and lift heights to joint targets. It checks names against fixed lists, clamps targets to the joint limits, and refuses to open the jaws while an object is lifted. It re-sends targets at 5 Hz so none is lost while the bridge starts, and deploys the jaws automatically after spawning.
+**Own nodes:**
+
+`teleop_gui` is the operator window (tkinter). It publishes `/cmd_vel` at 10 Hz while a drive button or key is held, scaled by the speed sliders, then sends a few zero commands and goes quiet, so it does not fight other nodes driving the robot. Jaw and lift buttons send requests on `/arm_mode` and `/lift_mode`; the window shows the state `arm_controller` reports back.
+
+`arm_controller` is the gripper controller. It maps jaw-mode names and lift heights to joint targets. It checks names against fixed lists, clamps targets to the joint limits, and refuses to open the jaws while an object is lifted. It re-sends targets at 5 Hz so none is lost while the bridge starts, and deploys the jaws automatically after spawning.
 
 **Third-party nodes, and why:**
 - `robot_state_publisher` publishes the robot's link transforms from the URDF and `/joint_states`, which RViz and later navigation need.
 - `ros_gz_sim create` is the standard way to spawn a URDF into Gazebo Harmonic.
 - `ros_gz_bridge parameter_bridge` converts the Gazebo transport topics above to and from ROS 2 messages.
-- `teleop_twist_keyboard` gives simple keyboard driving on `/cmd_vel`.
+- `teleop_twist_keyboard` gives simple keyboard driving on `/cmd_vel` (an alternative to `teleop_gui`).
 - The Gazebo plugins `DiffDrive`, `JointPositionController` (jaws and lift in PID force mode) and `JointStatePublisher` turn velocity commands into wheel motion and drive the gripper.
 
 *(The rqt_graph will be added here.)*

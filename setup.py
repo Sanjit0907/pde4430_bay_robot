@@ -24,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'arm_controller = pde4430_bay_robot.arm_controller:main',
+            'teleop_gui = pde4430_bay_robot.teleop_gui:main',
         ],
     },
 )
