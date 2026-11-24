@@ -2,9 +2,9 @@
 
 Coursework for **PDE4430 Mobile Robotics** (Middlesex University Dubai, 2026–27).
 
-A differential-drive robot with a low front bumper and a **fold-out gripper on a lift**: two motorised jaws with rubber grip pads, which push, cage or **pick up** objects. It delivers the large sphere, the small sphere and the upright cylinder of the [`assessment_bay`](https://github.com/sameerkishore/ros2_assessment_world) world through the bay opening, using **physical contact only**. No joints, plugins or services attach objects or set their pose.
+A differential-drive robot with a low front bumper and a **fold-out gripper on a lift**: two motorised jaws with rubber grip pads, a **scoop tray** (ramp) and two **hook fingers**. It **picks up all three objects**: the small sphere and the cylinder in the jaw pads, the large sphere on the tray, locked there by the fingers. It delivers the large sphere, the small sphere and the upright cylinder of the [`assessment_bay`](https://github.com/sameerkishore/ros2_assessment_world) world through the bay opening, using **physical contact only**. No joints, plugins or services attach objects or set their pose.
 
-> Status: robot design, gripper and lift, Gazebo integration, gripper control, scripted delivery trials and the teleoperation GUI done. Autonomy is in progress on the `autonomy` branch: bay perception (LiDAR + camera) done, mission control not started (section 8).
+> Status: robot design, gripper (jaws, scoop tray, hook fingers) and lift, Gazebo integration, gripper control, scripted delivery trials (all three objects picked up and delivered) and the teleoperation GUI done. Autonomy is in progress on the `autonomy` branch: bay perception (LiDAR + camera) done, mission control not started (section 8).
 
 ---
 
@@ -27,17 +27,19 @@ From the `assessment_bay` package:
 
 | Part | Choice | Why |
 |---|---|---|
-| Base | Differential drive, 0.24 × 0.26 m chassis, wheels r 0.05 m on a 0.30 m track. Front and rear ball casters | Turns on the spot for small, precise corrections. Two casters stop it pitching when the arms are out |
+| Base | Differential drive, 0.24 × 0.26 m chassis, wheels r 0.05 m on a 0.30 m track. Front caster right under the bumper (0.085 m ahead of the wheels), rear caster, **2 kg battery ballast** at the back | Turns on the spot for small, precise corrections. With the tray and fingers out and the 1 kg sphere held 0.44 m ahead, the centre of mass moves forward: the ballast and the forward caster keep the robot on its wheels (without them it tipped 8.7° onto the tray tip as soon as the lift rose) |
 | Bumper | Plate 0.34 m wide, **0.02–0.24 m** above the floor | Pushes the cylinder with its contact centroid at ~0.13 m, below its 0.20 m CoM, so it slides instead of tipping. Meets the large sphere just under its equator |
-| **Gripper jaws** | Two 0.44 m plates, 0.02–0.30 m high, pivoting about vertical axes at the bumper corners, with a 0.40 m post at each tip. Driven by Gazebo joint position controllers (effort limit 5 N·m, about 25 N squeeze at the pads) | Folded back along the sides at spawn (0.451 × 0.475 m footprint). Swing out after spawn to guide, cage or grip each object (modes below) |
+| **Gripper jaws** | Two 0.44 m plates, 0.02–0.30 m high, pivoting about vertical axes at the bumper corners, with a 0.40 m post at each tip. Gazebo joint position controllers in force mode (P 60, capped at 5 N·m, about 25 N squeeze at the pads) | Folded back along the sides at spawn. Swing out after spawn to guide, cage or grip each object (modes below) |
+| **Scoop tray (ramp)** | 0.36 × 0.30 m tray with a 0.10 m bevelled tip, hinged at the foot of the bumper, on the lift. Folded up at spawn, flat when deployed: top 16 mm above the floor, tip 4 mm, tip underside 1.5 mm, a 7° slope. Reaches 0.59 m ahead | The large sphere sits on it, so the lift can raise it. Low and gentle, so a sphere pushed against the tip rolls up onto it easily. Folded, a rubber pad on its underside takes over from the bumper pad it covers |
+| **Hook fingers** | A 0.35 m finger hinged at each jaw tip, 0.25–0.40 m high (the large sphere's equator). Three positions: `fold` (along the jaw), `open` (straight on, reach 0.79 m), `hook` (90° to the jaw, inwards). Force mode, 3 N·m, slippery (μ 0.2) | The large sphere is wider than the jaw pivots, so the jaws alone can only touch it behind its middle. Swinging from `open` to `hook`, the fingers sweep round its front and push it up onto the tray and back against the bumper. Hooked, they lock it there (section below) |
 | **Grip pads** | Black rubber pads (μ 1.5), 0.12 × 0.15 m, 0.05–0.20 m above the floor, mounted **turned 27°** on the jaws, plus a rubber pad on the bumper face | When the jaws close on a 0.2 m object (they stop at about 27° inward), the two pad faces are **parallel** and press straight across its middle, like a parallel-jaw gripper, so a sphere cannot roll out. Separate links on preserved fixed joints, so they grip while the rest of each jaw stays slippery for guiding |
-| **Lift** | Carriage on two steel rails, prismatic joint 0–0.15 m, PID force control | Raises both jaws, so a gripped small sphere or cylinder is **picked up** and carried clear of the floor, then set down in the bay |
-| Friction | Wheels μ 1.0, casters 0, bumper 0.3, jaws 0.1, pads 1.5 | Objects slide along the jaws into the centre, and the pads hold them when squeezed |
+| **Lift** | Carriage on two steel rails, prismatic joint 0–0.15 m, PID force control (capped at 70 N, ~2.5× the heaviest load) | Raises the jaws, fingers and tray together, so whatever they hold is **picked up** and carried clear of the floor, then set down in the bay |
+| Friction | Wheels μ 1.0, casters 0, bumper 0.3, jaws 0.1, fingers 0.2, tray 0.4, pads 1.5 | Objects slide along the jaws and fingers into the centre and onto the tray, and the pads hold the small objects when squeezed |
 | LiDAR | 360°, 0.12–8 m, on a mast, scan plane **0.35 m** | Above the arms and bumper so they don't block it. Below the 0.5 m bay walls, and sees the 0.4 m cylinder and the large sphere |
 | Camera | 640×480, on a pole at **0.72 m**, tilted 31° down | Sees the jaws and, over the top of the 0.6 m sphere, the yellow strip and objects ahead |
 | Motion limits | 0.5 m/s, 0.5 m/s², 1.5 rad/s | Gentle acceleration so pushed spheres aren't flung ahead |
 
-Total mass 7.0 kg. Inertias use the solid-body formulas (comments in the URDF).
+Total mass 9.75 kg. Footprint at spawn 0.481 × 0.475 m (`scripts/check_urdf.py`). Inertias use the solid-body formulas (comments in the URDF).
 
 ### Arm modes
 
@@ -54,24 +56,40 @@ Angles are measured outward from straight ahead. They come from the object sizes
 
 Lift heights (`/lift_mode`): `down` 0 m, `carry` 0.08 m, `up` 0.15 m, or any height in metres.
 
-**Safety rules in `arm_controller`:** the jaws can only open (any mode except `grip`/`close`) while the lift is down, so a lifted object is never dropped by accident. `fold` while lifted lowers the lift first. All targets are clamped to the joint limits.
+Scoop tray (`/scoop_mode`): `up` (folded, spawn) or `down` (flat). It is deployed automatically after spawn, together with the jaws.
+
+Fingers (`/finger_mode`), angle to their jaw: `fold` 0° (along the jaw, spawn), `hook` 90° (target 70°, past where they meet the sphere, so they keep pressing with the full 3 N·m), `open` 180° (straight on). Gazebo spawns joints at 0, so 0 has to be the folded position.
+
+**Safety rules in `arm_controller`:**
+- The jaws can only open (any mode except `grip`/`close`) while the lift is down, so a lifted object is never dropped by accident.
+- Hooked fingers can only open or fold while the lift is down (they hold the lifted sphere).
+- The jaws cannot move while the fingers are hooked, and with the fingers open they can only move between `wide`, `large` and `straight` (closer, the long fingers would cross). The fingers can only open or hook with the jaws in one of those modes.
+- The scoop tray only moves while the lift is down.
+- `fold` folds everything (fingers, tray, jaws) and lowers the lift first. All targets are clamped to the joint limits.
 
 ### Delivery strategy
 
-- **Large sphere:** set `large` (V). First drive round to the far side of the sphere so that the robot, the sphere and the target are in a line. Then drive slowly into it so it settles in the V, and push **straight** without stopping. For the bay, line up with the opening and push until the robot is about 0.7 m short of the yellow strip (the V is 0.9 m wide, nearly as wide as the 1.0 m opening). Then stop: the sphere keeps rolling straight into the bay and stops at the back wall. If it drifts, back off and line up again rather than turning while pushing.
-- **Small sphere / cylinder (pick and place):** open `wide` and drive up slowly. **Stop before the bumper touches the object**: a sphere that is bumped rolls away at the robot's speed. Then:
+- **Large sphere (scoop and hook):** tray `down`, jaws `large` (the 35° V), fingers `open`. Drive up slowly and **stop with the sphere just short of the tray tip** (centre ~0.66 m ahead of the robot centre). Then:
+  1. Fingers `hook`: they sweep round the front of the sphere and push it backwards. The only way it can go is up the tray tip, so it rolls onto the tray and against the bumper. Hooked, the fingers press its front sides, and it is locked between the bumper, the jaws and the fingers, on the tray.
+  2. Lift `carry`: it is picked up (+9 cm).
+  3. Drive to the bay (turns are fine, it is held). Line up first: with the fingers hooked the robot is ~0.9 m wide, and the opening is 1.0 m.
+  4. Lift `down`, fingers `open`: it rolls forward off the tray. Reverse out.
+- **Small sphere / cylinder (pick and place):** tray `up` (folded: these are held by the jaw pads, and the tray tip would push them away), fingers `fold`, open `wide` and drive up slowly. **Stop before the bumper touches the object**: a sphere that is bumped rolls away at the robot's speed. Then:
   1. `close`: the jaws swing in around it and centre it.
   2. `grip`: the pads squeeze it.
   3. Lift `carry`: it is picked up off the floor.
   4. Drive into the bay (turns are fine, it is held).
   5. Lift `down`, then `straight` to release, and reverse out.
-- **Why not pick up the large sphere?** It is 0.6 m wide, wider than the robot. Jaws that fold inside the 0.5 m spawn square cannot reach around it, so it is pushed in the V.
+- **Pushing the large sphere** in the `large` V still works as a fallback: line up with the opening, push straight, stop about 0.7 m short of the strip and let it roll in (the original strategy, design history 1–4).
 
 *Design history (from the trials in section 7):*
 1. **Catching from `wide`, then closing to 35°** squeezed the sphere forward out of the V, because the arms touch it behind its widest point. Fix: put the arms at 35° *before* reaching the sphere and drive into it.
 2. **Turning while pushing** loses the large sphere whatever the arm shape. It rolls with almost no resistance, so any sideways push gives it speed it never loses, and a pusher cannot pull it back. Holding it through turns would need arms that wrap past its middle, which cannot fold inside the 0.5 m spawn square because the sphere is wider than the robot. **Line up and push straight** (the world's README also says the approach "has to be lined up").
 3. **A narrow fork** (arms at 10°, sphere in the notch between the tips) was tried and dropped. In camera snapshots the sphere bounced between the two thin tips and slid off. The V pushes along two long faces and stays centred.
 4. **Tip posts:** each arm got a 0.40 m post at its tip, so a sphere that rides along an arm meets a flat face rather than the plate's 0.30 m top edge (exactly its equator).
+5. **Picking up the large sphere: a passive ramp does not work.** The first scoop tray (12° tip, 2 mm above the floor) only nudged the sphere, which rolled away: at 0.12 m/s and even at 0.45 m/s it rose 6 mm on the tip and was kicked ahead. A free ball needs only a tiny push to roll, and that is all a moving ramp gives it. Something must hold the ball while it goes onto the ramp, hence the **fingers**: they push it backwards into the tip, so it can only go up.
+6. **The fingers stalled the sphere half-way** (0.55 m instead of 0.44 m): climbing a 12° tip onto a 22 mm tray took more push than the fingers could give before their reaction forced the soft jaws open (35° → 47°). Fixes: a lower tray (16 mm) with a 7° tip, slippery fingers (μ 0.2, so the sphere rolls along them; they hold it by position, not friction) and stiffer jaws (P 20 → 60).
+7. **The robot tipped onto its nose** (8.7°) whenever the lift rose with the fingers out: the centre of mass had moved ahead of the front caster, and the tray tip had been propping it up. atan(8 cm / 0.52 m) = 8.7°, exactly where the lifted tip meets the floor again. Fixes: 2 kg ballast at the back and the front caster moved under the bumper. Pitch while carrying the large sphere: +0.3°.
 
 ## 3. Package layout
 
@@ -133,6 +151,8 @@ The keyboard teleop also still works: `ros2 run teleop_twist_keyboard teleop_twi
 ```bash
 ros2 topic pub --once /arm_mode std_msgs/msg/String "{data: grip}"    # fold|wide|large|straight|close|grip
 ros2 topic pub --once /lift_mode std_msgs/msg/String "{data: carry}"  # down|carry|up or metres
+ros2 topic pub --once /scoop_mode std_msgs/msg/String "{data: down}"  # up|down
+ros2 topic pub --once /finger_mode std_msgs/msg/String "{data: hook}" # fold|open|hook
 ```
 
 **Reset objects / check results** (from `assessment_bay`; the checker is for testing only):
@@ -162,8 +182,12 @@ robot_state_publisher -> /tf (robot links), RViz
 | `/cmd_vel` | `geometry_msgs/Twist` | ROS → Gazebo | drive commands to the diff-drive plugin |
 | `/arm_mode` | `std_msgs/String` | `teleop_gui` / user → `arm_controller` | jaw mode: `fold`, `wide`, `large`, `straight`, `close`, `grip` |
 | `/lift_mode` | `std_msgs/String` | `teleop_gui` / user → `arm_controller` | lift: `down`, `carry`, `up` or a height in metres |
-| `/arm_state`, `/lift_state` | `std_msgs/String` (latched) | `arm_controller` → `teleop_gui` | current jaw mode / lift setting |
+| `/scoop_mode` | `std_msgs/String` | `teleop_gui` / user → `arm_controller` | scoop tray: `up`, `down` |
+| `/finger_mode` | `std_msgs/String` | `teleop_gui` / user → `arm_controller` | fingers: `fold`, `open`, `hook` |
+| `/arm_state`, `/lift_state`, `/scoop_state`, `/finger_state` | `std_msgs/String` (latched) | `arm_controller` → `teleop_gui` | current jaw / lift / tray / finger setting |
 | `/lift/cmd_pos` | `std_msgs/Float64` | ROS → Gazebo | lift height target (m) |
+| `/scoop/cmd_pos` | `std_msgs/Float64` | ROS → Gazebo | scoop tray angle target (rad) |
+| `/fingers/cmd_pos` | `std_msgs/Float64` | ROS → Gazebo | finger angle target (rad), both fingers |
 | `/left_arm/cmd_pos`, `/right_arm/cmd_pos` | `std_msgs/Float64` | ROS → Gazebo | arm joint targets (rad) |
 | `/odom` | `nav_msgs/Odometry` | Gazebo → ROS | wheel odometry |
 | `/tf` | `tf2_msgs/TFMessage` | Gazebo → ROS | `odom → base_footprint` |
@@ -183,7 +207,7 @@ robot_state_publisher -> /tf (robot links), RViz
 
 `bay_detector` and `strip_detector` find the bay with the robot's own sensors (section 8).
 
-`arm_controller` is the gripper controller. It maps jaw-mode names and lift heights to joint targets. It checks names against fixed lists, clamps targets to the joint limits, and refuses to open the jaws while an object is lifted. It re-sends targets at 5 Hz so none is lost while the bridge starts, and deploys the jaws automatically after spawning.
+`arm_controller` is the gripper controller. It maps jaw modes, lift heights, tray and finger settings to joint targets. It checks names against fixed lists, clamps targets to the joint limits, and applies the safety rules above (e.g. it refuses to open the jaws or unhook the fingers while an object is lifted). It re-sends targets at 5 Hz so none is lost while the bridge starts, and deploys the jaws and the tray automatically after spawning.
 
 **Third-party nodes, and why:**
 - `robot_state_publisher` publishes the robot's link transforms from the URDF and `/joint_states`, which RViz and later navigation need.
@@ -207,15 +231,17 @@ docker run --rm --network none --shm-size=2g -v <path-to>/pde4430_ws:/ws --entry
   /ws/src/pde4430_bay_robot/scripts/docker_sim_test.sh
 ```
 
-Each trial (`scripts/bay_trials.py`) places the object 0.9 m ahead of the robot and catches it with the arms. It drives an S-bend (about 29° right, then 29° left) and checks the object is still in the jaws. It then delivers the object and judges the result with `assessment_bay`'s own `object_in_bay()` rule.
+Each trial (`scripts/bay_trials.py`) places the object 1.3 m ahead of the robot, drives up and stops just short of it, and **picks it up** (large sphere: tray and fingers; small objects: jaw pads). It drives an S-bend (about 26° right, then 26° left) and checks the object is still held and raised. It then lines up with the bay, drives in, sets the object down, releases it, reverses out, and judges the result with `assessment_bay`'s own `object_in_bay()` rule. It also runs natively: `python3 scripts/bay_trials.py` with the simulation up.
 
-Latest full run with the gripper, after the switch to force-controlled jaws (tuning step 6; native Ubuntu, headless; **3/3 objects delivered**):
+Latest full run, with the scoop tray and hook fingers (native Ubuntu, headless; **3/3 objects picked up and delivered**):
 
-| Object | Method | Lift / object raised | Held while carried | Final position | Result |
+| Object | Held by | Lift / object raised | Held while carried | Final position | Result |
 |---|---|---|---|---|---|
-| Large sphere | pushed in the 35° V, released 0.7 m short | (too big to grip) | centred | (0.00, 2.50) | in the bay |
-| Small sphere | **gripped and lifted**, S-bend, set down | 7.9 cm / **7.7 cm** | held up through the S-bend | (−0.01, 2.69) | in the bay |
-| Cylinder | **gripped and lifted**, S-bend, set down | 7.9 cm / **7.9 cm** | held up and upright | (0.14, 1.94) | in the bay, upright |
+| Large sphere | **scoop tray + hooked fingers** | 7.7 cm / **9.0 cm** | held up through the S-bend, robot pitch +0.3° | (−0.20, 2.49) | in the bay |
+| Small sphere | jaw pads (`grip`) | 8.0 cm / **8.0 cm** | held up through the S-bend | (+0.01, 2.46) | in the bay |
+| Cylinder | jaw pads (`grip`) | 8.0 cm / **8.1 cm** | held up and upright | (+0.01, 2.21) | in the bay, upright |
+
+The large sphere is held about 5 cm off-centre (the two fingers do not sweep exactly together) and rolls a little sideways when released, so it ended at x = −0.20, exactly the limit for a 0.6 m sphere in the 1.0 m bay. It counts as delivered, but with no margin: releasing it further in, or centring it before the lift (e.g. jaws briefly to `large` again), would give some.
 
 *Gripper tuning found by the trials:*
 1. **Squeeze force:** a jaw target only 1° past the contact angle gave almost no squeeze, and the small sphere slipped. The `grip` target is now well past contact (40°), so the jaw motors always push at their effort limit.

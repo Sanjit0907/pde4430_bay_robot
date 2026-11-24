@@ -10,10 +10,14 @@ because a key release went to another window.
 Subscribes
     /arm_state    std_msgs/String   current jaw mode (latched, from arm_controller)
     /lift_state   std_msgs/String   current lift setting (latched, from arm_controller)
+    /scoop_state  std_msgs/String   scoop tray up/down (latched, from arm_controller)
+    /finger_state std_msgs/String   fingers fold/open/hook (latched, from arm_controller)
 Publishes
     /cmd_vel      geometry_msgs/Twist  drive command, 10 Hz while driving
     /arm_mode     std_msgs/String      jaw mode: fold, wide, large, straight, close, grip
     /lift_mode    std_msgs/String      lift: down, carry, up - or a height in metres
+    /scoop_mode   std_msgs/String      scoop tray: up, down
+    /finger_mode  std_msgs/String      fingers: fold, open, hook
 
 The jaw and lift buttons only send requests. arm_controller applies the safety rules
 (e.g. it refuses to open the jaws while lifted), so the mode shown in the window is
@@ -34,6 +38,8 @@ from std_msgs.msg import String
 
 JAW_MODES = ('fold', 'wide', 'large', 'straight', 'close', 'grip')
 LIFT_MODES = ('down', 'carry', 'up')
+SCOOP_MODES = ('up', 'down')
+FINGER_MODES = ('fold', 'open', 'hook')
 LIFT_MAX = 0.15                      # m, lift joint limit
 
 # Direction buttons: (row, column, label, forward, turn left). 0, 0 = stop.
@@ -67,10 +73,17 @@ class TeleopGui(Node):
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.arm_pub = self.create_publisher(String, '/arm_mode', 10)
         self.lift_pub = self.create_publisher(String, '/lift_mode', 10)
+        self.scoop_pub = self.create_publisher(String, '/scoop_mode', 10)
+        self.finger_pub = self.create_publisher(String, '/finger_mode', 10)
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.arm_state, self.lift_state = '?', '?'
+        self.scoop_state, self.finger_state = '?', '?'
         self.create_subscription(String, '/arm_state', self.on_arm_state, latched)
         self.create_subscription(String, '/lift_state', self.on_lift_state, latched)
+        self.create_subscription(String, '/scoop_state',
+                                 lambda m: setattr(self, 'scoop_state', m.data), latched)
+        self.create_subscription(String, '/finger_state',
+                                 lambda m: setattr(self, 'finger_state', m.data), latched)
 
     def on_arm_state(self, msg):
         self.arm_state = msg.data
@@ -89,6 +102,12 @@ class TeleopGui(Node):
 
     def send_lift(self, request):
         self.lift_pub.publish(String(data=request))
+
+    def send_scoop(self, mode):
+        self.scoop_pub.publish(String(data=mode))
+
+    def send_fingers(self, mode):
+        self.finger_pub.publish(String(data=mode))
 
 
 class Window:
@@ -109,8 +128,9 @@ class Window:
         self.build_speed()
         self.build_jaws()
         self.build_lift()
+        self.build_scoop_fingers()
         self.status = tk.Label(self.root, anchor='w', font=('TkFixedFont', 10))
-        self.status.grid(row=2, column=0, columnspan=2, sticky='we', padx=8, pady=(0, 8))
+        self.status.grid(row=3, column=0, columnspan=2, sticky='we', padx=8, pady=(0, 8))
 
         self.root.bind('<KeyPress>', self.on_key_press)
         self.root.bind('<KeyRelease>', self.on_key_release)
@@ -170,6 +190,25 @@ class Window:
         tk.Button(frame, text='Set', width=6,
                   command=lambda: self.node.send_lift(f'{self.height.get():.2f}')
                   ).grid(row=1, column=2, padx=2, sticky='s')
+
+    def build_scoop_fingers(self):
+        frame = tk.LabelFrame(
+            self.root, text='Scoop tray and fingers (large sphere: tray down, jaws '
+                            'large, fingers open, stop short, hook, lift)')
+        frame.grid(row=2, column=0, columnspan=2, sticky='we', padx=8, pady=(0, 8))
+        self.scoop_buttons, self.finger_buttons = {}, {}
+        tk.Label(frame, text='Tray').grid(row=0, column=0, padx=(4, 2))
+        for i, mode in enumerate(SCOOP_MODES):
+            b = tk.Button(frame, text=mode, width=6, bg=NORMAL,
+                          command=lambda m=mode: self.node.send_scoop(m))
+            b.grid(row=0, column=1 + i, padx=2, pady=2)
+            self.scoop_buttons[mode] = b
+        tk.Label(frame, text='   Fingers').grid(row=0, column=3, padx=(4, 2))
+        for i, mode in enumerate(FINGER_MODES):
+            b = tk.Button(frame, text=mode, width=6, bg=NORMAL,
+                          command=lambda m=mode: self.node.send_fingers(m))
+            b.grid(row=0, column=4 + i, padx=2, pady=2)
+            self.finger_buttons[mode] = b
 
     # ------------------------------------------------------------------ input
     def press_button(self, direction):
@@ -239,15 +278,16 @@ class Window:
             self.stop_repeats -= 1
 
         arm, lift = self.node.arm_state, self.node.lift_state
-        for mode, b in self.jaw_buttons.items():
-            b.configure(bg=HIGHLIGHT if mode == arm else NORMAL,
-                        fg='white' if mode == arm else 'black')
-        for mode, b in self.lift_buttons.items():
-            b.configure(bg=HIGHLIGHT if mode == lift else NORMAL,
-                        fg='white' if mode == lift else 'black')
+        scoop, fingers = self.node.scoop_state, self.node.finger_state
+        for buttons, current in ((self.jaw_buttons, arm), (self.lift_buttons, lift),
+                                 (self.scoop_buttons, scoop),
+                                 (self.finger_buttons, fingers)):
+            for mode, b in buttons.items():
+                b.configure(bg=HIGHLIGHT if mode == current else NORMAL,
+                            fg='white' if mode == current else 'black')
         self.status.configure(
             text=f'cmd  v {linear:+.2f} m/s  w {angular:+.2f} rad/s   |   '
-                 f'jaws: {arm}   lift: {lift}')
+                 f'jaws: {arm}   lift: {lift}   tray: {scoop}   fingers: {fingers}')
         self.root.after(TICK_MS, self.tick)
 
     def close(self):

@@ -80,6 +80,29 @@
     </inertial>
   </link>
 
+  <!-- ===================== Ballast ===================== -->
+  <!-- 2 kg battery pack low in the back of the chassis. It moves the centre of mass
+       back, so the robot stays on its wheels with the tray and fingers out and the
+       1 kg large sphere held 0.39 m in front (without it the robot tipped forward
+       onto the tray tip as soon as the lift rose). -->
+  <link name="ballast">
+    <visual>
+      <geometry><box size="0.08 0.20 0.06"/></geometry>
+      <material name="carriage_dark"/>
+    </visual>
+    <inertial>
+      <mass value="2.0"/>
+      <!-- solid box: Ixx = m/12 (y^2+z^2), Iyy = m/12 (x^2+z^2), Izz = m/12 (x^2+y^2) -->
+      <inertia ixx="0.00727" ixy="0" ixz="0" iyy="0.00167" iyz="0" izz="0.00773"/>
+    </inertial>
+  </link>
+  <joint name="ballast_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="ballast"/>
+    <!-- 0.11 m behind the wheels, inside the chassis -->
+    <origin xyz="-0.11 0 0.02" rpy="0 0 0"/>
+  </joint>
+
   <!-- ===================== Drive wheels (r 0.05, width 0.03, track 0.30) ===================== -->
   <link name="left_wheel">
     <visual>
@@ -155,10 +178,14 @@
       <inertia ixx="0.000024" ixy="0" ixz="0" iyy="0.000024" iyz="0" izz="0.000024"/>
     </inertial>
   </link>
+  <!-- Front caster right under the bumper (0.085 m ahead of the wheels): with the
+       fingers and tray out and the large sphere held, the robot's centre of mass
+       moves forward, and the further forward this support is, the more margin
+       against tipping onto the nose. -->
   <joint name="front_caster_joint" type="fixed">
     <parent link="base_link"/>
     <child link="front_caster"/>
-    <origin xyz="0.05 0 -0.025" rpy="0 0 0"/>
+    <origin xyz="0.085 0 -0.025" rpy="0 0 0"/>
   </joint>
 
   <!-- ===================== Front bumper ===================== -->
@@ -399,6 +426,149 @@
     <origin xyz="-0.134 -0.020 -0.035" rpy="0 0 -0.4712"/>
   </joint>
 
+  <!-- ===================== Scoop tray (ramp) ===================== -->
+  <!-- A thin tray hinged at the foot of the bumper, on the lift carriage. Folded up
+       (q = 0) it stands upright in front of the bumper, so the robot still fits the
+       0.5 m spawn square. Deployed (q = pi/2) it lies flat, 0.36 m long, with a
+       bevelled tip only 2 mm above the floor - like a dustpan. Driving into a sphere,
+       the tip slides under it: the tip touches the sphere so low that the contact
+       pushes it UP rather than forward, so it rolls onto the tray and back against
+       the bumper. Because the tray rides on the lift, raising the lift raises
+       whatever sits on it.
+       Link frame at the hinge, geometry drawn FOLDED (tray along +z). Deployed, link
+       +z points forward and link -x points up, so the tray's upper face is its -x face.
+       Deployed heights above the floor: hinge 0.010, tray top 0.016, tip top 0.004,
+       tip underside 0.0015. Reaches 0.59 m ahead of the robot centre. Low and gentle
+       (a 7 deg tip), so little push is needed to roll a sphere up onto it. -->
+  <link name="scoop">
+    <!-- tray plate: 0.36 long, 0.30 wide, 6 mm thick -->
+    <visual>
+      <origin xyz="-0.003 0 0.185" rpy="0 0 0"/>
+      <geometry><box size="0.006 0.30 0.36"/></geometry>
+      <material name="steel"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.003 0 0.185" rpy="0 0 0"/>
+      <geometry><box size="0.006 0.30 0.36"/></geometry>
+    </collision>
+    <!-- bevelled tip: 0.10 long, 2.5 mm thick, sloping 7 deg from the tray top down
+         to 4 mm above the floor -->
+    <visual>
+      <origin xyz="0.00124 0 0.41485" rpy="0 0.1194 0"/>
+      <geometry><box size="0.0025 0.30 0.1007"/></geometry>
+      <material name="steel"/>
+    </visual>
+    <collision>
+      <origin xyz="0.00124 0 0.41485" rpy="0 0.1194 0"/>
+      <geometry><box size="0.0025 0.30 0.1007"/></geometry>
+    </collision>
+    <!-- rubber pad on the underside near the hinge: when the tray is folded it faces
+         forward at the height of the bumper pad, and takes over its job (the folded
+         tray covers the bumper pad) -->
+    <visual>
+      <origin xyz="0.002 0 0.09" rpy="0 0 0"/>
+      <geometry><box size="0.004 0.14 0.10"/></geometry>
+      <material name="rubber_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0.002 0 0.09" rpy="0 0 0"/>
+      <geometry><box size="0.004 0.14 0.10"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="-0.002 0 0.23" rpy="0 0 0"/>
+      <mass value="0.4"/>
+      <!-- approximated as a 0.006 x 0.30 x 0.46 box -->
+      <inertia ixx="0.01005" ixy="0" ixz="0" iyy="0.00705" iyz="0" izz="0.0030"/>
+    </inertial>
+  </link>
+  <joint name="scoop_joint" type="revolute">
+    <parent link="lift_carriage"/>
+    <child link="scoop"/>
+    <!-- hinge 0.128 m ahead of the robot centre, 0.010 m above the floor -->
+    <origin xyz="0.058 0 -0.150" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <!-- deployed it rests on its upper limit (the controller pushes past it), so the
+         weight on the tray is carried by the joint stop, not the controller -->
+    <limit lower="0.0" upper="1.5708" effort="10.0" velocity="1.5"/>
+    <dynamics damping="0.5" friction="0.0"/>
+  </joint>
+
+  <!-- ===================== Hook fingers ===================== -->
+  <!-- A 0.35 m finger hinged at each jaw tip, 0.25 - 0.40 m above the floor, with
+       three positions (angle relative to its jaw; Gazebo spawns joints at 0, so 0
+       must be the folded one):
+         fold      0 deg  lies flat back along the jaw (spawn, and for the small
+                          objects), on the jaw side that faces outwards at spawn
+         hook     90 deg  at right angles to the jaw, pointing inwards
+         open    180 deg  straight on from the jaw, so jaw + finger reach 0.79 m
+       Why: the large sphere (0.6 m) is wider than the jaw pivots (0.37 m apart), so
+       the jaws alone can only touch it BEHIND its middle, and squeezing there pushes
+       it forward. And the scoop tray cannot slide under a free sphere: its tip only
+       nudges it, and it rolls away. So, with the jaws in the 35 deg V ('large'), the
+       robot stops with the sphere just ahead of the tray tip and the OPEN fingers
+       reaching past its front. Swinging to HOOK, the fingers sweep round the front of
+       the sphere and push it backwards: up the tray tip (the only way it can go) onto
+       the tray, and against the bumper. Hooked, each finger touches the sphere's front
+       side at its equator, ~35 deg off straight ahead, and keeps pressing it back and
+       inwards: the sphere is locked between the bumper, the jaws and the fingers,
+       sitting on the tray, and the lift can raise it.
+       Geometry: the tangent from the jaw tip (0.46, 0.44) to the sphere sitting on the
+       tray against the bumper (centre 0.39 m ahead, r 0.30 + half the finger
+       thickness) runs at 90 deg to the jaw and touches 0.32 m along the finger.
+       Going from open (180) to hook (90) the finger sweeps inwards round the front
+       of the sphere, which is what pushes it onto the tray. -->
+  <link name="left_finger">
+    <visual>
+      <origin xyz="0.175 0 0.165" rpy="0 0 0"/>
+      <geometry><box size="0.35 0.02 0.15"/></geometry>
+      <material name="arm_yellow"/>
+    </visual>
+    <collision>
+      <origin xyz="0.175 0 0.165" rpy="0 0 0"/>
+      <geometry><box size="0.35 0.02 0.15"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0.175 0 0.165" rpy="0 0 0"/>
+      <mass value="0.15"/>
+      <inertia ixx="0.000286" ixy="0" ixz="0" iyy="0.00181" iyz="0" izz="0.00154"/>
+    </inertial>
+  </link>
+  <joint name="left_finger_joint" type="revolute">
+    <parent link="left_arm"/>
+    <child link="left_finger"/>
+    <!-- at the jaw tip, beside the plate on its +y side (the side that faces inwards
+         when deployed): 0 = folded back along the jaw (+x), 90 deg = hooked inwards
+         (jaw +y), 180 deg = straight on -->
+    <origin xyz="-0.44 0.02 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-0.1" upper="3.25" effort="3.0" velocity="2.0"/>
+    <dynamics damping="0.3" friction="0.0"/>
+  </joint>
+  <link name="right_finger">
+    <visual>
+      <origin xyz="0.175 0 0.165" rpy="0 0 0"/>
+      <geometry><box size="0.35 0.02 0.15"/></geometry>
+      <material name="arm_yellow"/>
+    </visual>
+    <collision>
+      <origin xyz="0.175 0 0.165" rpy="0 0 0"/>
+      <geometry><box size="0.35 0.02 0.15"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0.175 0 0.165" rpy="0 0 0"/>
+      <mass value="0.15"/>
+      <inertia ixx="0.000286" ixy="0" ixz="0" iyy="0.00181" iyz="0" izz="0.00154"/>
+    </inertial>
+  </link>
+  <joint name="right_finger_joint" type="revolute">
+    <parent link="right_arm"/>
+    <child link="right_finger"/>
+    <origin xyz="-0.44 -0.02 0" rpy="0 0 0"/>
+    <axis xyz="0 0 -1"/>
+    <limit lower="-0.1" upper="3.25" effort="3.0" velocity="2.0"/>
+    <dynamics damping="0.3" friction="0.0"/>
+  </joint>
+
   <!-- ===================== LiDAR mast ===================== -->
   <!-- Mast 0.04 x 0.04, from the chassis top (0.125 m) to 0.325 m -->
   <link name="mast_link">
@@ -492,6 +662,13 @@
   <gazebo reference="bumper_pad_joint"><preserveFixedJoint>true</preserveFixedJoint></gazebo>
   <gazebo reference="left_pad_joint"><preserveFixedJoint>true</preserveFixedJoint></gazebo>
   <gazebo reference="right_pad_joint"><preserveFixedJoint>true</preserveFixedJoint></gazebo>
+  <!-- scoop tray: low friction, so objects slide/roll onto it easily; its rubber pad
+       (used when folded) is part of the same link, so it gets the tray's friction -->
+  <gazebo reference="scoop"><mu1>0.4</mu1><mu2>0.4</mu2></gazebo>
+  <!-- fingers: slippery, so the sphere they push can roll along them up onto the
+       tray. They hold it by where they are (in front of it), not by friction. -->
+  <gazebo reference="left_finger"><mu1>0.2</mu1><mu2>0.2</mu2></gazebo>
+  <gazebo reference="right_finger"><mu1>0.2</mu1><mu2>0.2</mu2></gazebo>
 
   <gazebo>
     <!-- Differential drive: /cmd_vel (geometry_msgs/Twist) in, /odom + TF out.
@@ -517,15 +694,17 @@
          /left_arm/cmd_pos and /right_arm/cmd_pos (0 = folded, see table above).
          Force (PID) mode: the joint torque is p_gain * error + d_gain * error rate,
          capped at cmd_max N m. The cap equals the joint effort (5 N m), so the grip
-         squeeze stays the same. (Velocity-command mode stopped moving the jaws after
+         squeeze stays the same. p 60: stiff enough that the jaws hold their V while the
+         fingers push the large sphere (at p 20 they gave way by 12 deg), and in 'grip'
+         (13 deg past contact) the squeeze reaches the full 5 N m. (Velocity-command mode stopped moving the jaws after
          a Gazebo update; README section 7, tuning step 6.) -->
     <plugin filename="gz-sim-joint-position-controller-system"
             name="gz::sim::systems::JointPositionController">
       <joint_name>left_arm_joint</joint_name>
       <topic>left_arm/cmd_pos</topic>
-      <p_gain>20</p_gain>
+      <p_gain>60</p_gain>
       <i_gain>0</i_gain>
-      <d_gain>2</d_gain>
+      <d_gain>4</d_gain>
       <cmd_max>5</cmd_max>
       <cmd_min>-5</cmd_min>
     </plugin>
@@ -533,11 +712,51 @@
             name="gz::sim::systems::JointPositionController">
       <joint_name>right_arm_joint</joint_name>
       <topic>right_arm/cmd_pos</topic>
-      <p_gain>20</p_gain>
+      <p_gain>60</p_gain>
       <i_gain>0</i_gain>
-      <d_gain>2</d_gain>
+      <d_gain>4</d_gain>
       <cmd_max>5</cmd_max>
       <cmd_min>-5</cmd_min>
+    </plugin>
+
+    <!-- Scoop tray: std_msgs/Float64 angle (rad) on /scoop/cmd_pos, 0 = folded up,
+         pi/2 = flat. Force (PID) mode. Deployed, arm_controller asks for a little past
+         pi/2, so the tray rests on its joint stop. -->
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>scoop_joint</joint_name>
+      <topic>scoop/cmd_pos</topic>
+      <p_gain>40</p_gain>
+      <i_gain>0</i_gain>
+      <d_gain>3</d_gain>
+      <cmd_max>10</cmd_max>
+      <cmd_min>-10</cmd_min>
+    </plugin>
+
+    <!-- Hook fingers: both follow /fingers/cmd_pos (the joints are mirrored, so the
+         same angle moves both alike). 0 = folded, pi/2 = hooked, pi = open. Force
+         (PID) mode, capped at the 3 N m joint effort: hooked, arm_controller asks for
+         less than 90 deg (past where they meet the sphere), so the fingers keep
+         pressing it with a steady force. -->
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>left_finger_joint</joint_name>
+      <topic>fingers/cmd_pos</topic>
+      <p_gain>15</p_gain>
+      <i_gain>0</i_gain>
+      <d_gain>1</d_gain>
+      <cmd_max>3</cmd_max>
+      <cmd_min>-3</cmd_min>
+    </plugin>
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>right_finger_joint</joint_name>
+      <topic>fingers/cmd_pos</topic>
+      <p_gain>15</p_gain>
+      <i_gain>0</i_gain>
+      <d_gain>1</d_gain>
+      <cmd_max>3</cmd_max>
+      <cmd_min>-3</cmd_min>
     </plugin>
 
     <!-- Lift: std_msgs/Float64 height (m, 0 - 0.15) on /lift/cmd_pos -->
@@ -550,12 +769,13 @@
       <p_gain>3000</p_gain>
       <i_gain>500</i_gain>
       <d_gain>150</d_gain>
-      <i_max>30</i_max>
-      <i_min>-30</i_min>
-      <!-- force cap: ~3x the lifted weight (jaws + carriage + object ~ 16 N), so it
-           lifts smoothly instead of jerking the object -->
-      <cmd_max>45</cmd_max>
-      <cmd_min>-45</cmd_min>
+      <i_max>45</i_max>
+      <i_min>-45</i_min>
+      <!-- force cap: ~2.5x the heaviest lifted weight (carriage, jaws, fingers, scoop
+           tray and the 1 kg large sphere ~ 28 N), so it lifts smoothly instead of
+           jerking the object -->
+      <cmd_max>70</cmd_max>
+      <cmd_min>-70</cmd_min>
     </plugin>
 
     <!-- Wheel, jaw and lift positions on /joint_states -->

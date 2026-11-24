@@ -10,15 +10,16 @@ Run with the simulation already up (sim.launch.py, objects spawned):
     python3 bay_trials.py [large_sphere small_sphere cylinder]
 
 Each trial:
-  1. teleport the robot to (0, -0.5) facing the bay, arms 'wide'
+  1. teleport the robot to (0, -0.9) facing the bay, gripper set up for the object
   2. teleport the object to (0, 0.4), straight ahead
-  3. drive forward until the object is between the arms
-  4. switch arms to the carry mode ('large' or 'close')
-  5. caged objects: drive an S-bend (turn right then left) - must stay in the jaws;
-     large sphere: push straight (it rolls freely and cannot be caged) - must stay centred
-  6. push towards the bay and release
-       large sphere: stop short of the opening, it rolls on into the bay
-       small objects: drive in, open arms to 'straight', reverse out
+  3. drive up and stop just short of it
+  4. pick it up:
+       large sphere: scoop tray down, jaws in the 35 deg V, fingers open; the fingers
+         HOOK round its front and push it up onto the tray, against the bumper
+       small objects: scoop tray folded, jaws close (cage) then grip (squeeze)
+     then raise the lift = PICK UP
+  5. drive an S-bend (turn right then left) - it must stay held and raised
+  6. line up with the bay, drive in, set it down, release, reverse out
   7. judge with assessment_bay's own object_in_bay() rule; check the cylinder is upright
 """
 import math
@@ -38,31 +39,28 @@ from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import String
 
-sys.path.insert(0, '/root/ws/install/assessment_bay/lib/assessment_bay')
+sys.path.insert(0, '/root/ws/install/assessment_bay/lib/assessment_bay')   # Docker
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),    # native
+                                '../../../install/assessment_bay/lib/assessment_bay'))
 import bay_layout as L  # noqa: E402  (provided by the assessment_bay package)
 
 WORLD = L.WORLD_NAME
 ROBOT = 'bay_robot'
 FRONT = 0.10                     # bumper face, metres ahead of the robot centre
 # per object:
-#   pre     arm mode while approaching
-#   mode    arm mode while carrying
-#   reach   object centre distance ahead of the bumper face when engaged
-#   gap     stop the approach this far short of `reach` (0 = drive into contact)
-#   push_to robot y at which the object is far enough into the bay
-#   turns   True = test carrying it through an S-bend (caged objects only)
-#   z       spawn height of the object centre
+#   how      'hook' (large sphere: scoop tray + fingers) or 'grip' (jaw pads)
+#   pre      jaw mode while approaching
+#   stop_at  stop the approach when the object centre is this far ahead of the
+#            robot centre (just short of touching it: a bumped sphere rolls away)
+#   held_at  where the object centre sits once held (for lining up with the bay)
+#   z        spawn height of the object centre
 OBJECTS = {
-    # large sphere: arms already in the 35 deg V, drive into it, push straight, stop
-    # short of the opening (the V is 0.9 m wide) and let it roll on into the bay
-    'large_sphere': dict(pre='large', mode='large', reach=0.294, gap=0.0, push_to=0.9,
-                         turns=False, z=0.30),
-    # small objects: open funnel, stop before touching (a bumped sphere rolls away), cage
-    'small_sphere': dict(pre='wide', mode='close', reach=0.10, gap=0.04, push_to=1.72,
-                         turns=True, z=0.10),
-    'cylinder':     dict(pre='wide', mode='close', reach=0.10, gap=0.04, push_to=1.72,
-                         turns=True, z=0.20),
+    'large_sphere': dict(how='hook', pre='large', stop_at=0.66, held_at=0.44, z=0.30),
+    'small_sphere': dict(how='grip', pre='wide', stop_at=0.24, held_at=0.23, z=0.10),
+    'cylinder':     dict(how='grip', pre='wide', stop_at=0.24, held_at=0.23, z=0.20),
 }
+DROP_Y = 2.2          # object centre y when set down in the bay (strip at 1.55 - 1.65,
+                      # back wall at 2.8: room for the 0.3 m radius large sphere)
 
 
 class PoseStream:
@@ -141,6 +139,8 @@ class Trials(Node):
         self.cmd = self.create_publisher(Twist, '/cmd_vel', 10)
         self.arm = self.create_publisher(String, '/arm_mode', 10)
         self.lift = self.create_publisher(String, '/lift_mode', 10)
+        self.scoop = self.create_publisher(String, '/scoop_mode', 10)
+        self.fingers = self.create_publisher(String, '/finger_mode', 10)
         # Simulation time from /clock: Gazebo may run slower than real time (e.g. no GPU),
         # so all durations below are measured in simulated seconds.
         self.sim_t = None
@@ -178,7 +178,7 @@ class Trials(Node):
 
     def on_joints(self, msg):
         for n, q in zip(msg.name, msg.position):
-            if 'arm' in n or 'lift' in n:
+            if 'arm' in n or 'lift' in n or 'finger' in n or 'scoop' in n:
                 self.arm_q[n] = q
         for n, v in zip(msg.name, msg.velocity):
             if 'wheel' in n:
@@ -252,6 +252,44 @@ class Trials(Node):
         self.lift.publish(String(data=height))
         self.sleep(wait)
 
+    def set_scoop(self, mode, wait=2.0):
+        self.scoop.publish(String(data=mode))
+        self.sleep(wait)
+
+    def set_fingers(self, mode, wait=2.5):
+        self.fingers.publish(String(data=mode))
+        self.sleep(wait)
+
+    def face(self, x, y, tol=math.radians(1.5)):
+        """Turn on the spot to face the point (x, y) (ground-truth pose, test only)."""
+        def err(p):
+            return math.remainder(math.atan2(y - p[1], x - p[0]) - p[5], math.tau)
+        for _ in range(3):          # turn, settle, correct the overshoot
+            e = err(gz_pose(ROBOT))
+            if abs(e) < tol:
+                return
+            self.drive(0.0, 0.3 if e > 0 else -0.3, lambda p: abs(err(p)) < tol, timeout=30)
+            self.stop(0.5)
+
+    def goto(self, x, y, speed=0.12):
+        """Face (x, y) and drive to it, steering on the way (test only)."""
+        self.face(x, y)
+        t = Twist()
+        while self.sim_t is None:
+            rclpy.spin_once(self, timeout_sec=0.1)
+        end = self.sim_t + 60
+        while self.sim_t < end:
+            p = gz_pose(ROBOT)
+            d = math.hypot(x - p[0], y - p[1])
+            if d < 0.03:
+                break
+            e = math.remainder(math.atan2(y - p[1], x - p[0]) - p[5], math.tau)
+            t.linear.x = min(speed, 0.5 * d + 0.03)
+            t.angular.z = max(-0.4, min(0.4, 1.5 * e))
+            self.cmd.publish(t)
+            rclpy.spin_once(self, timeout_sec=0.02)
+        self.stop(0.5)
+
     def in_jaws(self, obj):
         """Object position in the robot frame: (forward, lateral)."""
         rx, ry, _, _, _, ryaw = gz_pose(ROBOT)
@@ -263,95 +301,76 @@ class Trials(Node):
     # ---- one trial ----
     def trial(self, obj):
         spec = OBJECTS[obj]
+        hook = spec['how'] == 'hook'
         log = []
         default = L.FIXED_LAYOUT[obj]
 
-        # 1-2. setup: robot 1.5 m south of where the object will be
+        # 1-2. setup: robot 1.3 m south of where the object will be
         self.stop()
-        self.set_lift('down', 1.0)        # lift must be down before the jaws may open
-        self.set_arms(spec['pre'], 0.5)
+        self.set_lift('down', 1.0)        # lift must be down before anything opens
+        self.set_fingers('fold', 1.5)
+        self.set_arms(spec['pre'], 1.0)
+        self.set_scoop('down' if hook else 'up', 1.5)
+        if hook:
+            self.set_fingers('open')
         gz_set_pose(ROBOT, 0.0, -0.9, 0.05, math.pi / 2)
         self.sleep(1.0)
         gz_set_pose(obj, 0.0, 0.4, spec['z'])
         self.sleep(3.0)
 
-        # 3. approach. Small objects: stop while BETWEEN the open arms but not yet
-        #    touched (a bumped sphere rolls away at the robot's speed), then cage.
-        #    Large sphere: drive slowly into the V. Fast to 0.25 m short, then slow.
-        def gap(p):
-            return gz_pose(obj)[1] - (p[1] + FRONT + spec['reach'])
-        pushing = spec['gap'] == 0.0       # large sphere: never stop once in contact
-        self.drive(0.15, 0.0, lambda p: gap(p) <= 0.25)
-        ok = self.drive(0.08 if pushing else 0.05, 0.0,
-                        lambda p: gap(p) <= spec['gap'], stop=not pushing)
+        # 3. approach and stop just short of the object
+        self.drive(0.15, 0.0, lambda p: self.in_jaws(obj)[0] <= spec['stop_at'] + 0.25)
+        ok = self.drive(0.05, 0.0, lambda p: self.in_jaws(obj)[0] <= spec['stop_at'])
         log.append(f'approach {"ok" if ok else "TIMEOUT"}')
 
-        # 4. small objects: cage (centres it), grip (squeeze), lift = PICK UP
-        #    large sphere: keep pushing to seat it in the V
-        if pushing:
-            self.drive_for(0.10, 0.0, 1.5, stop=False)
+        # 4. take hold and pick it up
+        if hook:
+            self.set_fingers('hook', 4.0)    # sweep it up onto the tray and lock it
         else:
             self.set_arms('close')
             self.set_arms('grip', 2.0)
-            self.set_lift('carry')
-        self.snapshot(f'{obj}_1_approach')
+        self.snapshot(f'{obj}_1_held')
         f, l = self.in_jaws(obj)
-        log.append(f'gripped at fwd {f:.2f} lat {l:+.2f} arms {self.arms_deg()}')
-        if not pushing:
-            self.sleep(2.0)
-            raised = gz_pose(obj)[2] - spec['z']
-            picked = raised > 0.05
-            log.append(f'robot z {gz_pose(ROBOT)[2]:+.3f} pitch {math.degrees(gz_pose(ROBOT)[4]):+.1f} deg')
-            log.append(f'lift joint {self.arm_q.get("lift_joint", float("nan")) * 100:.1f} cm, '
-                       f'object raised {raised * 100:+.1f} cm -> '
-                       f'{"PICKED UP" if picked else "NOT LIFTED"}')
+        log.append(f'held at fwd {f:.2f} lat {l:+.2f} arms {self.arms_deg()}')
+        self.set_lift('carry')
+        self.sleep(2.0)
+        raised = gz_pose(obj)[2] - spec['z']
+        log.append(f'robot pitch {math.degrees(gz_pose(ROBOT)[4]):+.1f} deg, '
+                   f'lift {self.arm_q.get("lift_joint", float("nan")) * 100:.1f} cm, '
+                   f'object raised {raised * 100:+.1f} cm -> '
+                   f'{"PICKED UP" if raised > 0.05 else "NOT LIFTED"}')
 
-        if spec['turns']:
-            # 5a. caged objects: S-bend (~0.67 m radius), right then left, 26 deg each
-            self.drive_for(0.10, -0.15, 3.0)
-            self.drive_for(0.10, 0.15, 3.0)
-            what = 'S-bend'
-        else:
-            # 5b. large sphere: it rolls freely and cannot be caged, so it is lined up
-            #     and pushed STRAIGHT; the V keeps it centred. Push 0.4 m and check.
-            self.drive_for(0.10, 0.0, 4.0, stop=False)
-            what = 'straight push'
+        # 5. S-bend (~0.67 m radius), right then left, 26 deg each
+        self.drive_for(0.10, -0.15, 3.0)
+        self.drive_for(0.10, 0.15, 3.0)
         self.snapshot(f'{obj}_2_carry')
         f, l = self.in_jaws(obj)
-        if spec['turns']:
-            still_up = gz_pose(obj)[2] - spec['z'] > 0.05
-            kept = 0.05 < f < 0.85 and abs(l) < 0.15 and still_up
-            log.append(f'after {what} fwd {f:.2f} lat {l:+.2f} '
-                       f'{"still held up" if still_up else "DROPPED"} -> '
-                       f'{"kept" if kept else "LOST"}')
-        else:
-            kept = True                    # judged only by where it ends up
-            log.append(f'after {what} fwd {f:.2f} lat {l:+.2f}')
+        still_up = gz_pose(obj)[2] - spec['z'] > 0.05
+        kept = abs(f - spec['held_at']) < 0.15 and abs(l) < 0.15 and still_up
+        log.append(f'after S-bend fwd {f:.2f} lat {l:+.2f} '
+                   f'{"still held up" if still_up else "DROPPED"} -> '
+                   f'{"kept" if kept else "LOST"}')
 
-        # 6. deliver
-        if spec['mode'] == 'close':
-            # carried: drive into the bay, set it down, open the jaws (parallel jaws fit
-            # inside the 1.0 m bay), reverse out
-            self.drive(0.12, 0.0, lambda p: p[1] >= spec['push_to'])
-            log.append(f'carry to bay {self.last_drive}')
-            rz, rp = gz_pose(ROBOT)[2], math.degrees(gz_pose(ROBOT)[4])
-            log.append(f'robot z {rz:+.3f} pitch {rp:+.1f} deg, wheel vel L/R '
-                       f'{self.wheel_v.get("left_wheel_joint", 0):.2f}/'
-                       f'{self.wheel_v.get("right_wheel_joint", 0):.2f} rad/s')
-            self.set_lift('down')
-            self.set_arms('straight')
-            self.snapshot(f'{obj}_3_released')
-            log.append(f'released at y {gz_pose(obj)[1]:.2f} (robot {gz_pose(ROBOT)[1]:.2f}, '
-                       f'lift {self.arm_q.get("lift_joint", 0) * 100:.1f} cm, '
-                       f'jaws {self.arms_deg()})')
-            self.drive(-0.15, 0.0, lambda p: p[1] <= 0.8)
-            self.sleep(3.0)
+        # 6. line up with the bay (the opening is 1.0 m; with the fingers hooked the
+        #    robot is ~0.9 m wide), drive in until the object is over DROP_Y, set it
+        #    down, release, reverse out
+        r_obj = L.OBJECTS[obj]['radius']
+        line_up_y = min(gz_pose(ROBOT)[1] + 0.3,                  # ahead, never back
+                        L.STRIP_INNER_Y - 0.1 - spec['held_at'] - r_obj - 0.05)
+        self.goto(0.0, line_up_y)
+        self.face(0.0, 3.0)
+        stop_y = DROP_Y - spec['held_at']
+        self.drive(0.10, 0.0, lambda p: p[1] >= stop_y)
+        log.append(f'carry to bay {self.last_drive}')
+        self.set_lift('down')
+        if hook:
+            self.set_fingers('open')
         else:
-            # large sphere: keep pushing to just short of the opening, then stop -
-            # it rolls on straight into the bay
-            self.drive(0.12, 0.0, lambda p: p[1] >= spec['push_to'])
-            self.sleep(12.0)
-            self.snapshot(f'{obj}_3_released')
+            self.set_arms('straight', 2.0)
+        self.snapshot(f'{obj}_3_released')
+        log.append(f'released at y {gz_pose(obj)[1]:.2f} (robot {gz_pose(ROBOT)[1]:.2f})')
+        self.drive(-0.15, 0.0, lambda p: p[1] <= 0.6)
+        self.sleep(4.0)
 
         # 7. judge (assessment_bay rule)
         x, y, z, roll, pitch, _ = gz_pose(obj)
