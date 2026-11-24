@@ -162,7 +162,7 @@ arm_controller --/left_arm/cmd_pos, /right_arm/cmd_pos, /lift/cmd_pos--> ros_gz_
 - `ros_gz_sim create` is the standard way to spawn a URDF into Gazebo Harmonic.
 - `ros_gz_bridge parameter_bridge` converts the Gazebo transport topics above to and from ROS 2 messages.
 - `teleop_twist_keyboard` gives simple keyboard driving on `/cmd_vel`.
-- The Gazebo plugins `DiffDrive`, `JointPositionController` (jaws in velocity mode, lift in PID force mode) and `JointStatePublisher` turn velocity commands into wheel motion and drive the gripper.
+- The Gazebo plugins `DiffDrive`, `JointPositionController` (jaws and lift in PID force mode) and `JointStatePublisher` turn velocity commands into wheel motion and drive the gripper.
 
 *(The rqt_graph will be added here.)*
 
@@ -181,13 +181,13 @@ docker run --rm --network none --shm-size=2g -v <path-to>/pde4430_ws:/ws --entry
 
 Each trial (`scripts/bay_trials.py`) places the object 0.9 m ahead of the robot and catches it with the arms. It drives an S-bend (about 29° right, then 29° left) and checks the object is still in the jaws. It then delivers the object and judges the result with `assessment_bay`'s own `object_in_bay()` rule.
 
-Latest full run with the gripper (all checks pass, **3/3 objects delivered**):
+Latest full run with the gripper, after the switch to force-controlled jaws (tuning step 6; native Ubuntu, headless; **3/3 objects delivered**):
 
 | Object | Method | Lift / object raised | Held while carried | Final position | Result |
 |---|---|---|---|---|---|
-| Large sphere | pushed in the 35° V, released 0.7 m short | (too big to grip) | centred | (−0.02, 2.50) | in the bay |
-| Small sphere | **gripped and lifted**, S-bend, set down | 7.9 cm / **7.7 cm** | held up through the S-bend | (0.30, 2.70) | in the bay |
-| Cylinder | **gripped and lifted**, S-bend, set down | 7.9 cm / **7.9 cm** | held up and upright | (0.13, 1.95) | in the bay, upright |
+| Large sphere | pushed in the 35° V, released 0.7 m short | (too big to grip) | centred | (0.00, 2.50) | in the bay |
+| Small sphere | **gripped and lifted**, S-bend, set down | 7.9 cm / **7.7 cm** | held up through the S-bend | (−0.01, 2.69) | in the bay |
+| Cylinder | **gripped and lifted**, S-bend, set down | 7.9 cm / **7.9 cm** | held up and upright | (0.14, 1.94) | in the bay, upright |
 
 *Gripper tuning found by the trials:*
 1. **Squeeze force:** a jaw target only 1° past the contact angle gave almost no squeeze, and the small sphere slipped. The `grip` target is now well past contact (40°), so the jaw motors always push at their effort limit.
@@ -195,6 +195,7 @@ Latest full run with the gripper (all checks pass, **3/3 objects delivered**):
 3. **Pad angle:** flat pads on the angled jaws pressed a sphere slightly ahead of its centre, so it rolled backwards out of the grip (it rose only 2–5 cm of the 8 cm lift). Turning the pads 27° makes them parallel when gripping: 0.2 cm slip.
 4. **Lift control:** a velocity-mode controller could not move the lift under the jaws' weight. A PID force controller, capped at about 3× the lifted weight, rises smoothly and holds height.
 5. **Deploy timing:** the jaws now deploy only after the robot's joints appear on `/joint_states`, and targets are re-sent on a steady clock. A command sent before the robot had spawned was lost.
+6. **Jaw control:** after a Gazebo Harmonic update (gz-sim vendor package, Nov 2026) the velocity-mode jaw controllers still received their targets but the jaws no longer moved, so they stayed folded after spawning. The jaws now use the same PID force mode as the lift: p 20, d 2, torque capped at 5 N·m (the joint effort limit). In `grip` the target is about 13° past contact, so the controller asks for about 4.6 N·m and the squeeze is nearly the same as before. All three trials pass again with the same lift heights.
 
 Robot camera views during the trials (from `bay_trials.py`, `SNAPSHOTS=<dir>`):
 

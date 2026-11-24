@@ -515,25 +515,29 @@
 
     <!-- Arm position controllers: std_msgs/Float64 angle (rad) on
          /left_arm/cmd_pos and /right_arm/cmd_pos (0 = folded, see table above).
-         Velocity-command mode: the joint is driven at p_gain * error, capped at
-         cmd_max rad/s - smooth and independent of arm inertia. -->
+         Force (PID) mode: the joint torque is p_gain * error + d_gain * error rate,
+         capped at cmd_max N m. The cap equals the joint effort (5 N m), so the grip
+         squeeze stays the same. (Velocity-command mode stopped moving the jaws after
+         a Gazebo update; README section 7, tuning step 6.) -->
     <plugin filename="gz-sim-joint-position-controller-system"
             name="gz::sim::systems::JointPositionController">
       <joint_name>left_arm_joint</joint_name>
       <topic>left_arm/cmd_pos</topic>
-      <use_velocity_commands>true</use_velocity_commands>
-      <p_gain>3.0</p_gain>
-      <cmd_max>1.5</cmd_max>
-      <cmd_min>-1.5</cmd_min>
+      <p_gain>20</p_gain>
+      <i_gain>0</i_gain>
+      <d_gain>2</d_gain>
+      <cmd_max>5</cmd_max>
+      <cmd_min>-5</cmd_min>
     </plugin>
     <plugin filename="gz-sim-joint-position-controller-system"
             name="gz::sim::systems::JointPositionController">
       <joint_name>right_arm_joint</joint_name>
       <topic>right_arm/cmd_pos</topic>
-      <use_velocity_commands>true</use_velocity_commands>
-      <p_gain>3.0</p_gain>
-      <cmd_max>1.5</cmd_max>
-      <cmd_min>-1.5</cmd_min>
+      <p_gain>20</p_gain>
+      <i_gain>0</i_gain>
+      <d_gain>2</d_gain>
+      <cmd_max>5</cmd_max>
+      <cmd_min>-5</cmd_min>
     </plugin>
 
     <!-- Lift: std_msgs/Float64 height (m, 0 - 0.15) on /lift/cmd_pos -->
